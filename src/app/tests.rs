@@ -7626,6 +7626,10 @@ mod tests {
             UiNotification::ContextCompactionCompleted(ContextCompactionCompletedEvent {
                 session_id: session_id.clone(),
                 context_state: UiContextState {
+                    cache_epoch_id: None,
+                    last_cache_invalidation_reason: None,
+                    semantic_head_id: None,
+                    semantic_head_kind: None,
                     session_id: session_id.clone(),
                     thread_id: None,
                     generation: 4,
@@ -10380,6 +10384,10 @@ mod tests {
             UiNotification::ContextCompactionCompleted(ContextCompactionCompletedEvent {
                 session_id: session_id.clone(),
                 context_state: UiContextState {
+                    cache_epoch_id: None,
+                    last_cache_invalidation_reason: None,
+                    semantic_head_id: None,
+                    semantic_head_kind: None,
                     session_id: session_id.clone(),
                     thread_id: None,
                     generation: 4,

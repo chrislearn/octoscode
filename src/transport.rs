@@ -2374,6 +2374,8 @@ impl ProtocolAppUiBackend {
             // submission, retain its prompt/error, and avoid a retry loop.
             AppUiCommand::SubmitPrompt(params) => AppUiEvent::Protocol(UiNotification::TurnError(
                 octos_core::ui_protocol::TurnErrorEvent {
+                    token_usage: None,
+                    partial_result: None,
                     session_id: params.session_id,
                     topic: params.topic,
                     turn_id: params.turn_id,

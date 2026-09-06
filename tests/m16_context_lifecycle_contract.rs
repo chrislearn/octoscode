@@ -264,6 +264,10 @@ fn cache_diagnostics_are_optional_and_do_not_leak_into_lifecycle_summary() {
         ContextNormalizationReportedEvent {
             session_id: session_id.clone(),
             context_state: UiContextState {
+                cache_epoch_id: None,
+                last_cache_invalidation_reason: None,
+                semantic_head_id: None,
+                semantic_head_kind: None,
                 session_id: session_id.clone(),
                 thread_id: None,
                 generation: 9,

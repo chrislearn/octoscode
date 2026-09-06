@@ -4535,6 +4535,8 @@ mod tests {
         store.apply_event(AppUiEvent::Protocol(
             octos_core::ui_protocol::UiNotification::TurnError(
                 octos_core::ui_protocol::TurnErrorEvent {
+                    token_usage: None,
+                    partial_result: None,
                     session_id,
                     topic: None,
                     turn_id,
@@ -5030,6 +5032,8 @@ mod tests {
         )));
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             octos_core::ui_protocol::TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id: session_id.clone(),
                 topic: None,
                 turn_id,

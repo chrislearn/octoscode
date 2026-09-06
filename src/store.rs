@@ -13701,6 +13701,8 @@ impl Store {
                         });
                         let message = error.message.clone();
                         let command = self.fail_live_reply(TurnErrorEvent {
+                            token_usage: None,
+                            partial_result: None,
                             session_id: session_id.clone(),
                             topic,
                             turn_id: turn_id.clone(),
@@ -15428,6 +15430,8 @@ impl Store {
                 self.state.approval = None;
             }
             let command = self.fail_live_reply(TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id,
                 topic: None,
                 turn_id,
@@ -20137,6 +20141,8 @@ mod tests {
         assert!(dropped.is_none());
         let terminal = store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id: session_id.clone(),
                 topic: None,
                 turn_id: live_turn.clone(),
@@ -20750,6 +20756,8 @@ mod tests {
 
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             octos_core::ui_protocol::TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id: b.clone(),
                 topic: None,
                 turn_id: octos_core::ui_protocol::TurnId::new(),
@@ -21716,6 +21724,8 @@ now analyzing the bus module"
         assert!(store.state.staged_submit_in_flight.contains_key(&b));
         let followup = store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id: a.clone(),
                 topic: None,
                 turn_id: a_submit.turn_id,
@@ -22088,6 +22098,8 @@ now analyzing the bus module"
         // Same for a stale TurnError.
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id: a.clone(),
                 topic: None,
                 turn_id: old_turn,
@@ -23716,6 +23728,8 @@ now analyzing the bus module"
 
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id: a,
                 topic: None,
                 turn_id: turn,
@@ -24347,6 +24361,8 @@ now analyzing the bus module"
         store.apply_event(message_delta_event(&a, &failed, "partial"));
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id: a.clone(),
                 topic: None,
                 turn_id: failed.clone(),
@@ -24364,6 +24380,8 @@ now analyzing the bus module"
         store.apply_event(message_delta_event(&a, &stopped, "partial"));
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id: a.clone(),
                 topic: None,
                 turn_id: stopped.clone(),
@@ -32012,6 +32030,8 @@ now analyzing the bus module"
 
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id: session_id.clone(),
                 topic: None,
                 turn_id: turn_id.clone(),
@@ -32052,6 +32072,8 @@ now analyzing the bus module"
 
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id: session_id.clone(),
                 topic: None,
                 turn_id: turn_id.clone(),
@@ -32091,6 +32113,8 @@ now analyzing the bus module"
 
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id: session_id.clone(),
                 topic: None,
                 turn_id: errored_turn.clone(),
@@ -32176,6 +32200,8 @@ now analyzing the bus module"
 
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id,
                 topic: None,
                 turn_id,
@@ -32544,6 +32570,8 @@ now analyzing the bus module"
 
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id,
                 topic: None,
                 turn_id: turn_id.clone(),
@@ -33300,6 +33328,8 @@ now analyzing the bus module"
         // LATE TurnError{A} arrives after B already completed.
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id,
                 topic: None,
                 turn_id: turn_a.clone(),
@@ -33370,6 +33400,8 @@ now analyzing the bus module"
         // LATE TurnError{A} arrives while B is still live.
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id,
                 topic: None,
                 turn_id: turn_a.clone(),
@@ -33608,6 +33640,8 @@ now analyzing the bus module"
         // LATE TurnError{A} arrives after B already completed.
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id,
                 topic: None,
                 turn_id: turn_a.clone(),
@@ -35031,6 +35065,8 @@ now analyzing the bus module"
 
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id: session_id.clone(),
                 topic: None,
                 turn_id,
@@ -35804,6 +35840,8 @@ now analyzing the bus module"
 
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id: session_id.clone(),
                 topic: None,
                 turn_id,
@@ -35848,6 +35886,8 @@ now analyzing the bus module"
 
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id,
                 topic: None,
                 turn_id,
@@ -35890,6 +35930,8 @@ now analyzing the bus module"
 
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id: session_id.clone(),
                 topic: None,
                 turn_id,
@@ -35937,6 +35979,8 @@ now analyzing the bus module"
         // A's late / stale terminal lands.
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id: session_id.clone(),
                 topic: None,
                 turn_id: turn_a,
@@ -36366,6 +36410,8 @@ now analyzing the bus module"
         store.interrupt_command().expect("interrupts");
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id: session_id.clone(),
                 topic: None,
                 turn_id: turn_id.clone(),
@@ -36433,6 +36479,8 @@ now analyzing the bus module"
         store.interrupt_command().expect("interrupts");
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id: session_id.clone(),
                 topic: None,
                 turn_id: turn_id.clone(),
@@ -36633,6 +36681,8 @@ now analyzing the bus module"
         // The interrupt's terminal lands and reconciles.
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id: session_id.clone(),
                 topic: None,
                 turn_id: turn_id.clone(),
@@ -36711,6 +36761,8 @@ now analyzing the bus module"
         // back for edit/resend, the original #270 affordance.
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id,
                 topic: None,
                 turn_id,
@@ -36773,6 +36825,8 @@ now analyzing the bus module"
 
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id,
                 topic: None,
                 turn_id,
@@ -36808,6 +36862,8 @@ now analyzing the bus module"
 
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id,
                 topic: None,
                 turn_id,
@@ -36845,6 +36901,8 @@ now analyzing the bus module"
         )));
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id,
                 topic: None,
                 turn_id,
@@ -36895,6 +36953,8 @@ now analyzing the bus module"
         store.state.switch_selected_session(1);
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id: session_a_id.clone(),
                 topic: None,
                 turn_id,
@@ -36950,6 +37010,8 @@ now analyzing the bus module"
         // A's late terminal arrives while B streams.
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id,
                 topic: None,
                 turn_id: turn_a,
@@ -36982,6 +37044,8 @@ now analyzing the bus module"
 
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id,
                 topic: None,
                 turn_id,
@@ -37021,6 +37085,8 @@ now analyzing the bus module"
         store.open_menu(MenuId::from(crate::menu::registry::MENU_HELP));
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id: session_id.clone(),
                 topic: None,
                 turn_id: turn_a,
@@ -37095,6 +37161,8 @@ now analyzing the bus module"
         store.open_menu(MenuId::from(crate::menu::registry::MENU_HELP));
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id: session_a_id.clone(),
                 topic: None,
                 turn_id: turn_a,
@@ -37177,6 +37245,8 @@ now analyzing the bus module"
         // A settles while B is active: A's prompt lands in A's draft.
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id: session_a_id.clone(),
                 topic: None,
                 turn_id: turn_a,
@@ -37199,6 +37269,8 @@ now analyzing the bus module"
         // B settles while active: B's prompt lands in the live composer.
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id: session_b_id,
                 topic: None,
                 turn_id: turn_b,
@@ -37255,6 +37327,8 @@ now analyzing the bus module"
         // A's terminal lands: its prompt must still restore (as A's draft).
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id: session_a_id.clone(),
                 topic: None,
                 turn_id,
@@ -37421,6 +37495,8 @@ now analyzing the bus module"
         store.open_menu(MenuId::from(crate::menu::registry::MENU_HELP));
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id,
                 topic: None,
                 turn_id,
@@ -38091,6 +38167,8 @@ now analyzing the bus module"
 
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id,
                 topic: None,
                 turn_id: TurnId::new(),
@@ -38283,6 +38361,10 @@ now analyzing the bus module"
             UiNotification::ContextCompactionCompleted(ContextCompactionCompletedEvent {
                 session_id: session_id.clone(),
                 context_state: UiContextState {
+                    cache_epoch_id: None,
+                    last_cache_invalidation_reason: None,
+                    semantic_head_id: None,
+                    semantic_head_kind: None,
                     session_id: session_id.clone(),
                     thread_id: Some("thread-1".into()),
                     generation: 4,
@@ -38354,6 +38436,10 @@ now analyzing the bus module"
             ContextNormalizationReportedEvent {
                 session_id: session_id.clone(),
                 context_state: UiContextState {
+                    cache_epoch_id: None,
+                    last_cache_invalidation_reason: None,
+                    semantic_head_id: None,
+                    semantic_head_kind: None,
                     session_id: session_id.clone(),
                     thread_id: None,
                     generation: 9,
@@ -38425,6 +38511,10 @@ now analyzing the bus module"
             ContextNormalizationReportedEvent {
                 session_id: session_id.clone(),
                 context_state: UiContextState {
+                    cache_epoch_id: None,
+                    last_cache_invalidation_reason: None,
+                    semantic_head_id: None,
+                    semantic_head_kind: None,
                     session_id: session_id.clone(),
                     thread_id: None,
                     generation: 1,
@@ -38488,6 +38578,10 @@ now analyzing the bus module"
         });
         let mut result = hydrate_result_with_turns(&session_id, Vec::new());
         result.context_state = Some(UiContextState {
+            cache_epoch_id: None,
+            last_cache_invalidation_reason: None,
+            semantic_head_id: None,
+            semantic_head_kind: None,
             session_id: session_id.clone(),
             thread_id: None,
             generation: 12,
@@ -38659,6 +38753,10 @@ now analyzing the bus module"
             UiNotification::ContextCompactionCompleted(ContextCompactionCompletedEvent {
                 session_id: session_id.clone(),
                 context_state: UiContextState {
+                    cache_epoch_id: None,
+                    last_cache_invalidation_reason: None,
+                    semantic_head_id: None,
+                    semantic_head_kind: None,
                     session_id: session_id.clone(),
                     thread_id: None,
                     generation: 4,
@@ -38755,6 +38853,10 @@ now analyzing the bus module"
             UiNotification::ContextCompactionCompleted(ContextCompactionCompletedEvent {
                 session_id: session_id.clone(),
                 context_state: UiContextState {
+                    cache_epoch_id: None,
+                    last_cache_invalidation_reason: None,
+                    semantic_head_id: None,
+                    semantic_head_kind: None,
                     session_id: session_id.clone(),
                     thread_id: None,
                     generation: 4,
@@ -38867,6 +38969,10 @@ now analyzing the bus module"
             state: AppState::new(vec![session], 0, "ready".into(), None, false),
         };
         let context_state = UiContextState {
+            cache_epoch_id: None,
+            last_cache_invalidation_reason: None,
+            semantic_head_id: None,
+            semantic_head_kind: None,
             session_id: session_id.clone(),
             thread_id: None,
             generation: 4,
@@ -38946,6 +39052,10 @@ now analyzing the bus module"
             state: AppState::new(vec![session], 0, "ready".into(), None, false),
         };
         let context_state = UiContextState {
+            cache_epoch_id: None,
+            last_cache_invalidation_reason: None,
+            semantic_head_id: None,
+            semantic_head_kind: None,
             session_id: session_id.clone(),
             thread_id: None,
             generation: 4,
@@ -39073,6 +39183,10 @@ now analyzing the bus module"
         };
 
         let base_state = UiContextState {
+            cache_epoch_id: None,
+            last_cache_invalidation_reason: None,
+            semantic_head_id: None,
+            semantic_head_kind: None,
             session_id: session_id.clone(),
             thread_id: None,
             generation: 5,
@@ -39161,6 +39275,10 @@ now analyzing the bus module"
             UiNotification::ContextNormalizationReported(ContextNormalizationReportedEvent {
                 session_id: session_id.clone(),
                 context_state: UiContextState {
+                    cache_epoch_id: None,
+                    last_cache_invalidation_reason: None,
+                    semantic_head_id: None,
+                    semantic_head_kind: None,
                     session_id: session_id.clone(),
                     thread_id: None,
                     generation: 7,
@@ -39297,6 +39415,8 @@ now analyzing the bus module"
 
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id: session_id.clone(),
                 topic: None,
                 turn_id,
@@ -39371,6 +39491,8 @@ now analyzing the bus module"
 
         store.apply_event(AppUiEvent::Protocol(UiNotification::TurnError(
             TurnErrorEvent {
+                token_usage: None,
+                partial_result: None,
                 session_id: session_id.clone(),
                 topic: None,
                 turn_id: stale_turn,
@@ -42245,6 +42367,10 @@ now analyzing the bus module"
                 state: TurnLifecycleState::Active,
                 context: Some(serde_json::json!({"phase": "planning"})),
                 context_state: Some(UiContextState {
+                    cache_epoch_id: None,
+                    last_cache_invalidation_reason: None,
+                    semantic_head_id: None,
+                    semantic_head_kind: None,
                     session_id: SessionKey("local:test".into()),
                     thread_id: Some("thread-1".into()),
                     generation: 3,
@@ -44518,6 +44644,10 @@ now analyzing the bus module"
             },
             context: None,
             context_state: Some(UiContextState {
+                cache_epoch_id: None,
+                last_cache_invalidation_reason: None,
+                semantic_head_id: None,
+                semantic_head_kind: None,
                 session_id: session_id.clone(),
                 thread_id: Some("thread-1".into()),
                 generation: 2,
@@ -45391,6 +45521,8 @@ now analyzing the bus module"
 
     fn interrupted_terminal(session_id: &SessionKey, turn_id: &TurnId) -> AppUiEvent {
         AppUiEvent::Protocol(UiNotification::TurnError(TurnErrorEvent {
+            token_usage: None,
+            partial_result: None,
             session_id: session_id.clone(),
             topic: None,
             turn_id: turn_id.clone(),
