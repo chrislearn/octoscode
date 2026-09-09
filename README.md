@@ -898,6 +898,44 @@ cargo test
 # CARGO_TARGET_DIR=/tmp/octoscode-target cargo test   # on shared/locked hosts
 ```
 
+OLP tools are available through the CLI (the existing Bash scripts are bundled
+in the binary; no source checkout is required):
+
+```sh
+octoscode olp init .
+octoscode olp watch .octos/OUTER_LOOP_REVIEW.md 'ACK(done' --interval 5
+octoscode olp board-append .octos/OUTER_LOOP_REVIEW.md < entry.md
+octoscode olp evo harvest . --dry-run
+octoscode olp evo metrics . --json
+octoscode olp evo index .
+octoscode olp --help
+```
+
+`init` runs in the specified existing directory (default `.`); other paths are
+relative to the calling directory. Commands inherit stdin/stdout/stderr and
+return the original script's exit code. In particular, `init` can create the
+scaffolding and then return 2 when its dependency check finds missing tools.
+Existing files are preserved. Like the original script, init may install the
+watch helper under `~/.octos/outer/`.
+
+On Windows, the launcher looks for Git Bash alongside Git on PATH, then falls
+back to `bash`. Select an executable with `--bash` or `OCTOSCODE_BASH`:
+
+```powershell
+octoscode olp --bash 'C:\Program Files\Git\bin\bash.exe' init .
+Get-Content -Raw entry.md | octoscode olp board-append .octos/OUTER_LOOP_REVIEW.md
+```
+
+These commands still require Bash and the selected script's dependencies:
+init uses Git/Unix utilities; board append and harvest require `flock`;
+evolution tools require `python3` and their existing Unix utilities. Git Bash
+alone does not guarantee all dependencies. There is no PowerShell rewrite or
+Windows implementation of the Linux-only outer-duty lock. To use WSL, run the
+Linux octoscode binary inside WSL with Linux paths, rather than selecting the
+Windows WSL `bash.exe` launcher. The installed watch helper retains the original
+script's companion lookup rules for `--harvest`; the CLI watch command carries
+its own bundled companions.
+
 Heavier live and visual harnesses live alongside the code:
 
 - `scripts/run-onboarding-tmux-soak.sh` — reference end-to-end onboarding flow:
