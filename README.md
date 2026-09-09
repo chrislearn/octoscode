@@ -21,7 +21,7 @@ background tasks — all without leaving the shell.
 
 ## Start here
 
-Install **just the TUI** — it auto-provisions the Octos **server** (the brain)
+Install **octoscode** — it auto-provisions the Octos **server** (the brain)
 on first launch, so there's nothing else to set up:
 
 ```bash
@@ -140,7 +140,7 @@ cargo install octoscode
 A copy-pasteable, first-time walkthrough. By the end you have a local profile,
 an LLM provider, and a live coding session — no dashboard, no email OTP.
 
-### 1. Install the TUI
+### 1. Install octoscode
 
 Install `octoscode` as shown in [Start here](#start-here) — that's all you need.
 On first launch it downloads the matching Octos **server** into `~/.octos/bin`

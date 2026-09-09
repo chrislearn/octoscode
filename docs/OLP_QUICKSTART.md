@@ -38,10 +38,10 @@
 ## 2. 一键路径
 
 ```bash
-# ① 装 TUI(server 首启自动拉起,无后台常驻服务)
+# ① 安装 octoscode(server 首启自动拉起,无后台常驻服务)
 npm install -g @octos-org/octoscode
 
-# ② 在你的项目目录铺 OLP 脚手架(幂等,绝不覆盖已有文件)
+# ② 在项目目录初始化 OLP(可重复执行,不覆盖已有文件)
 cd your-project/
 octoscode olp init .
 #   旧版尚无 olp 子命令时,可 clone 本仓库后运行 bash scripts/olp-init.sh
@@ -57,7 +57,7 @@ octoscode --stdio-command 'octos serve --stdio --solo'
 其他 OLP 命令所需的 `python3`、`flock` 等依赖仍须具备。查看全部入口:
 `octoscode olp --help`。
 
-`olp-init.sh` 做四件事:依赖体检(缺什么、怎么装,一屏说清)、生成
+`octoscode olp init` 做四件事:依赖体检(缺什么、怎么装,一屏说清)、生成
 `.octos/loop.md`(内环维护循环)与 `.octos/OUTER_LOOP_REVIEW.md`(黑板
 模板)、把黑板加进 `.gitignore`(分支无关,防跨分支裂脑)、打印启动命令。
 
