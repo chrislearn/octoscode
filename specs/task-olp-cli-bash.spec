@@ -13,6 +13,9 @@ tags: [cli, olp, bash]
 - stdin/stdout/stderr 继承，参数独立传递、不拼接 shell 命令；返回脚本退出码。
 - `--bash` 优先于 `OCTOSCODE_BASH`；Windows 优先查找 Git Bash，最后回退 PATH bash。
 - 不增加 PowerShell 实现，不承诺 Windows 已提供 flock/Python 或 Linux 主审锁。
+- 用户指南与 OctoLoop skill 的 init 节使用 `octoscode olp init .`。
+  此次文档变更有意更新阶段 1 契约中 init 节的 golden；description、inner、
+  自主性纪律等其他章节继续使用原基准，不能随本次更新而放宽校验。
 
 ## 场景与真实测试
 
@@ -28,3 +31,5 @@ tags: [cli, olp, bash]
   `olp_evo_uses_bundled_python_companions_and_returns_harvest_status`
 - watch 对新增字面子串命中，旧匹配行不出现在结果中：
   `olp_watch_matches_new_literal_lines`
+- init 节采用 CLI 说明的新 golden，其余受保护章节保持原基准：
+  `olp_evo_retro_skill_step5_and_protected_sections_golden`
