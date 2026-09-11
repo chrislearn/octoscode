@@ -109,12 +109,26 @@ estimate: 0.5d
   那么 恢复 normal screen 后从 TUI 启动锚点向下清除
   并且 锚点上方由 installer 与 shell 拥有的输出保持不变
 
-场景: 退出时收回历史与 Composer 之间的空白带
-  测试: exit_clears_blank_gap_after_visible_history
-  假设 已完成历史停在屏幕中部且 Composer 固定在底部
-  当 用户退出进程
-  那么 从已保留历史的末尾向下清除
-  并且 shell prompt 紧接历史而不是留下一整屏空白
+场景: 正常退出将整段 TUI 压缩为会话卡片
+  测试: clean_exit_replaces_the_full_tui_with_a_compact_session_card
+  假设 大幅 welcome banner、已完成历史与 Composer 占据本次进程的 normal-screen 区域
+  当 用户通过 /exit 或退出快捷键正常退出进程
+  那么 从 TUI 最初启动锚点向下清除而非仅从已保留历史末尾清除
+  并且 原位置只留下小型 octoscode 卡片、会话说明与可复制的恢复命令
+
+场景: 恢复命令使用后端的规范会话键
+  测试: exit_card_resume_command_uses_canonical_session_and_profile
+  假设 protocol 会话具有规范 session id 与 profile id
+  当 构建正常退出卡片
+  那么 恢复命令为 octoscode --session <session-id> --profile-id <profile-id>
+  并且 mock 会话不展示虚假的恢复命令
+
+场景: 异常退出不伪造正常退出卡片
+  测试: exit_cleanup_without_clean_exit_keeps_the_conservative_anchor
+  假设 事件循环因错误或 panic 触发 TerminalGuard 回收
+  当 尚未标记正常退出
+  那么 仍从已保留历史的末尾向下清理 live UI
+  并且 不打印“已退出”卡片
 
 场景: 普通 inline 退出继续清理当前界面
   测试: inline_exit_still_clears_the_live_inline_viewport

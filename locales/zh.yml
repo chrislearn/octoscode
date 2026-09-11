@@ -4,6 +4,11 @@ composer:
   placeholder: "让 Octos 帮你改代码……"
 
 app:
+  exit_card:
+    closed: "已退出 TUI"
+    session: "会话"
+    resume: "恢复"
+    no_session: "尚未打开会话。"
   banner:
     title: "欢迎使用 Octos — 你的编程伙伴"
     greeting_named: "欢迎回来 — %{profile}"

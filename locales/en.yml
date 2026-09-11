@@ -13,6 +13,11 @@ composer:
   placeholder: "Ask Octos to change code..."
 
 app:
+  exit_card:
+    closed: "TUI closed"
+    session: "Session"
+    resume: "Resume"
+    no_session: "No session was opened."
   banner:
     title: "Welcome to Octos — Your Coding Buddy"
     greeting_named: "Welcome back — %{profile}"
