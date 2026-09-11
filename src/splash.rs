@@ -195,8 +195,9 @@ impl SplashSession {
 
     /// Drive the effect to completion, `should_stop`, or error. Always ends by
     /// painting the plain input text into the canvas area (deterministic final
-    /// state) and returning the cursor to the canvas TOP row, so the TUI's
-    /// inline viewport starts exactly over the splash's final frame.
+    /// state) and returning the cursor to the canvas TOP row so the settled
+    /// hold displays a stable complete frame. The production caller parks below
+    /// the canvas only after that hold.
     ///
     /// Raw-mode safe: rows are repositioned with `\r` + cursor-up instead of
     /// relying on cooked-mode `\n` (ttfx frames join rows with bare `\n`).
@@ -265,6 +266,20 @@ impl SplashSession {
         result.map(|_| stats)
     }
 
+    /// Finish the production handoff by parking the cursor immediately below
+    /// the settled splash. The event loop can then register those rows as
+    /// visible history instead of mistaking the cursor-at-top handoff for an
+    /// empty inline viewport and later scrolling the logo apart.
+    fn park_below_canvas(&self, out: &mut impl Write) -> Result<()> {
+        let down = self.rows.saturating_sub(1);
+        if down > 0 {
+            write!(out, "\x1b[{down}B").wrap_err("splash: cursor to canvas bottom")?;
+        }
+        out.write_all(b"\r\n")
+            .wrap_err("splash: park below canvas")?;
+        out.flush().wrap_err("splash: handoff flush")
+    }
+
     /// Draw `rows` lines over the reserved canvas area, CENTERED to
     /// `term_cols` as a BLOCK. Expects the cursor at column 0 of the bottom
     /// canvas row; restores that invariant on return.
@@ -277,8 +292,7 @@ impl SplashSession {
     /// plain final frame). Measuring the final text once is ANSI-immune,
     /// stable across frames, and agrees with the final paint by construction.
     /// Rows narrower than the block stay left-aligned within it, matching the
-    /// launch banner's figlet centering (`{art:<fig_w$}` then `centered()`),
-    /// so the final paint lands where the banner renders (smooth handoff).
+    /// launch banner's figlet centering (`{art:<fig_w$}` then `centered()`).
     fn paint(&self, out: &mut impl Write, frame: &str) -> Result<()> {
         let up = self.rows.saturating_sub(1);
         if up > 0 {
@@ -306,10 +320,12 @@ impl SplashSession {
     }
 }
 
-/// Play the startup splash if gating allows. Every failure is swallowed:
-/// the splash is decoration and must never block or delay startup beyond
-/// its own deadline (specs/task-startup-splash.spec: 失败静默).
-pub fn play(cli: &crate::cli::Cli) {
+/// Play the startup splash if gating allows, returning the number of settled
+/// rows parked above the cursor for the event loop to claim as visible history.
+/// Every failure is swallowed: the splash is decoration and must never block
+/// or delay startup beyond its own deadline (specs/task-startup-splash.spec:
+/// 失败静默).
+pub fn play(cli: &crate::cli::Cli) -> u16 {
     use std::io::IsTerminal;
 
     let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((0, 0));
@@ -322,12 +338,12 @@ pub fn play(cli: &crate::cli::Cli) {
         term_rows,
     };
     if !should_play(&gate) {
-        return;
+        return 0;
     }
-    let _ = play_inner(&cli.theme);
+    play_inner(&cli.theme).unwrap_or(0)
 }
 
-fn play_inner(theme: &crate::cli::ThemeName) -> Result<()> {
+fn play_inner(theme: &crate::cli::ThemeName) -> Result<u16> {
     let seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| u64::from(d.subsec_nanos()) ^ d.as_secs())
@@ -379,11 +395,10 @@ fn play_inner(theme: &crate::cli::ThemeName) -> Result<()> {
     crossterm::execute!(stdout, crossterm::cursor::Hide).ok();
 
     // NO cursor::MoveTo(0, 0): octoscode's TUI is an inline viewport that
-    // starts at the CURRENT cursor row — jumping to screen row 0 would paint
-    // the splash over shell scrollback and then leave the banner starting
-    // `rows` lines below (Bug 2). The splash plays from the cursor row, and
-    // `run()` returns the cursor to the canvas top so the banner's first
-    // frame overwrites the splash's final frame in place.
+    // starts from the CURRENT cursor row — jumping to screen row 0 would paint
+    // the splash over shell scrollback. The splash plays from that cursor row;
+    // `run()` returns to the canvas top for the settled hold, then the handoff
+    // parks below the complete canvas so the event loop can claim it as history.
 
     let deadline = std::time::Instant::now() + SPLASH_DEADLINE;
     let stats = session.run(&mut stdout, || {
@@ -398,7 +413,8 @@ fn play_inner(theme: &crate::cli::ThemeName) -> Result<()> {
             std::thread::sleep(std::time::Duration::from_millis(15));
         }
     }
-    Ok(())
+    session.park_below_canvas(&mut stdout)?;
+    Ok(session.rows)
 }
 
 /// Drain pending terminal events; any key press or resize stops the splash.
@@ -542,9 +558,9 @@ mod tests {
 
     #[test]
     fn run_leaves_cursor_on_canvas_top_row() {
-        // Bug 2 regression: the TUI's inline viewport starts at the current
-        // cursor row, so after the splash the cursor must be back on the
-        // canvas TOP row (not parked below the canvas). Verify run()'s tail:
+        // The animation driver returns to the canvas top so the settled frame
+        // is stable during the hold. The production handoff parks below it in
+        // a separate, testable step. Verify run()'s tail:
         // after the final paint's trailing `\r`, the last escape is
         // `\x1b[{rows-1}A\r` (cursor up to the canvas top, then home) — and
         // NOT `\r\n` (park below).
@@ -568,6 +584,23 @@ mod tests {
         assert!(
             !output.contains("\x1b[0m"),
             "an uncolored final paint must not emit a stray SGR reset"
+        );
+    }
+
+    #[test]
+    fn splash_handoff_parks_below_the_complete_canvas() {
+        let session = SplashSession::new(&["beams"], "AB\nCD", test_opts(), 10, String::new())
+            .expect("session builds");
+        let mut out = Vec::new();
+
+        session
+            .park_below_canvas(&mut out)
+            .expect("handoff succeeds");
+
+        assert_eq!(
+            String::from_utf8(out).expect("ANSI output"),
+            "\x1b[1B\r\n",
+            "handoff moves from the canvas top to the row immediately below it"
         );
     }
 }

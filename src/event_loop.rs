@@ -190,6 +190,15 @@ where
 }
 
 pub fn run(cli: Cli) -> Result<()> {
+    run_with_startup_history(cli, 0)
+}
+
+/// Run the TUI while claiming `startup_history_rows` immediately above the
+/// initial inline cursor. The startup splash parks below its settled canvas and
+/// passes that row count here, so finalized transcript output appends after the
+/// intact logo instead of treating it as unknown shell content and scrolling it
+/// apart one line at a time.
+pub fn run_with_startup_history(cli: Cli, startup_history_rows: u16) -> Result<()> {
     enable_raw_mode()?;
     // Warm the one-shot terminal background probe HERE — after raw mode is on
     // (so the OSC 11 reply isn't line-buffered or echoed) but BEFORE the input
@@ -208,17 +217,20 @@ pub fn run(cli: Cli) -> Result<()> {
     execute!(stdout, EnableBracketedPaste, EnableFocusChange)?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = InlineTerminal::new(backend)?;
+    let startup_history_bottom = claim_startup_history(&mut terminal, startup_history_rows);
     let mut guard = TerminalGuard {
         mode: RenderMode::Inline,
         saved_inline_viewport: None,
         saved_visible_history_extent: None,
         saved_inline_screen_size: None,
         mouse_captured: false,
-        live_inline_viewport: None,
+        normal_screen_cleanup_top: startup_history_bottom,
     };
-    // Track the inline viewport from frame one so Drop can clear exactly the
-    // rows the TUI painted (menu / composer / status bar), not a row more.
-    guard.live_inline_viewport = Some(terminal.viewport_area);
+    // Track the normal-screen cleanup anchor from frame one. Before transcript
+    // history exists this is the launch cursor; afterwards it advances to the
+    // row immediately below retained history, so Drop also removes any blank
+    // band before the bottom-pinned composer.
+    guard.track_inline_surface(&terminal);
 
     // i18n: select the UI language before the first render. `t!()` reads this
     // process-global locale, chosen at launch via --lang / OCTOS_LANG / LANG
@@ -497,6 +509,15 @@ pub fn run(cli: Cli) -> Result<()> {
     Ok(())
 }
 
+fn claim_startup_history<B>(terminal: &mut InlineTerminal<B>, rows: u16) -> u16
+where
+    B: Backend + io::Write,
+{
+    let bottom = terminal.viewport_area.top();
+    terminal.set_visible_history_extent(rows.min(bottom), bottom);
+    bottom
+}
+
 /// Draw one frame. In `Inline` mode this flushes newly-finalized history into
 /// scrollback (so it becomes natively selectable) and renders only the live UI
 /// into the bottom inline viewport. For full-screen overlays it switches to the
@@ -647,7 +668,7 @@ where
     // Keep the guard's clear-on-exit region in lockstep with what the inline
     // flow actually painted this frame (the viewport moves as the composer
     // and menus grow/shrink).
-    guard.live_inline_viewport = Some(terminal.viewport_area);
+    guard.track_inline_surface(terminal);
     Ok(())
 }
 
@@ -3473,20 +3494,20 @@ struct TerminalGuard {
     /// scrolls the pager). It must never be on in the inline chat flow, where
     /// it would defeat native terminal selection/copy.
     mouse_captured: bool,
-    /// The live inline viewport while running in Inline mode. On drop we
-    /// clear from this row down so the composer's last frames (status bar,
-    /// menu, spinner) don't fossilize in the user's scrollback — the inline
-    /// model deliberately owns NO screen real estate once the TUI is gone
-    /// (finalized output lives above the viewport via `insert_history`).
-    live_inline_viewport: Option<ratatui::layout::Rect>,
+    /// First row that is safe to erase on the normal screen. Before any
+    /// finalized history this stays at the process's initial cursor anchor;
+    /// once history is visible it advances to one-past that history. Clearing
+    /// from here removes both the live viewport and any blank band before it,
+    /// leaving the shell prompt directly after retained output.
+    normal_screen_cleanup_top: u16,
 }
 
 impl TerminalGuard {
     /// Restore the screen buffer and erase any inline viewport owned by this
-    /// process. An alternate-screen exit must clear the SAVED inline viewport:
-    /// `enter_alt_screen` deliberately sets `live_inline_viewport` to `None`,
-    /// but leaving the alternate screen reveals the normal-buffer composer that
-    /// was painted before the overlay opened.
+    /// process. `normal_screen_cleanup_top` is kept independently of the active
+    /// screen buffer, so an alternate-screen exit can restore the normal buffer
+    /// and remove both its hidden composer and the otherwise fossilized blank
+    /// band below the last retained history row.
     fn restore_render_surface_on_exit<W: io::Write>(&self, stdout: &mut W) {
         if self.mouse_captured {
             let _ = execute!(stdout, DisableMouseCapture);
@@ -3494,19 +3515,27 @@ impl TerminalGuard {
         if self.mode == RenderMode::AltScreen {
             let _ = execute!(stdout, LeaveAlternateScreen);
         }
-        let viewport = match self.mode {
-            RenderMode::Inline => self.live_inline_viewport,
-            RenderMode::AltScreen => self.saved_inline_viewport,
-        };
-        // An empty saved viewport means the overlay was the first frame, so the
-        // normal buffer contains no TUI-owned rows and must be left untouched
-        // (for example, to preserve first-install output above the shell).
-        if let Some(viewport) = viewport.filter(|viewport| !viewport.is_empty()) {
-            let _ = execute!(
-                stdout,
-                crossterm::cursor::MoveTo(0, viewport.top()),
-                crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)
-            );
+        let _ = execute!(
+            stdout,
+            crossterm::cursor::MoveTo(0, self.normal_screen_cleanup_top),
+            crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)
+        );
+    }
+
+    /// Record the normal-screen rows owned by the latest inline frame. A real
+    /// visible-history extent is authoritative; before history exists, retain
+    /// the earliest known anchor instead of following the bottom-pinned live
+    /// viewport downward and manufacturing a large blank gap on exit.
+    fn track_inline_surface<B>(&mut self, terminal: &InlineTerminal<B>)
+    where
+        B: Backend + io::Write,
+    {
+        if terminal.visible_history_rows() > 0 {
+            self.normal_screen_cleanup_top = terminal.visible_history_bottom();
+        } else {
+            self.normal_screen_cleanup_top = self
+                .normal_screen_cleanup_top
+                .min(terminal.viewport_area.top());
         }
     }
 
@@ -3554,9 +3583,6 @@ impl TerminalGuard {
         terminal.invalidate_viewport();
         terminal.last_known_screen_size = size;
         self.mode = RenderMode::AltScreen;
-        // While the overlay owns the alternate screen there is no inline
-        // viewport for Drop to clear.
-        self.live_inline_viewport = None;
         Ok(())
     }
 
@@ -3591,7 +3617,7 @@ impl TerminalGuard {
         }
         terminal.invalidate_viewport();
         self.mode = RenderMode::Inline;
-        self.live_inline_viewport = Some(terminal.viewport_area);
+        self.track_inline_surface(terminal);
         Ok(())
     }
 }
@@ -5480,7 +5506,7 @@ done
             saved_visible_history_extent: None,
             saved_inline_screen_size: None,
             mouse_captured: false,
-            live_inline_viewport: None,
+            normal_screen_cleanup_top: 0,
         };
         let mut scrollback = ScrollbackTracker::new();
         draw(
@@ -5615,7 +5641,7 @@ done
             saved_visible_history_extent: None,
             saved_inline_screen_size: None,
             mouse_captured: false,
-            live_inline_viewport: None,
+            normal_screen_cleanup_top: 0,
         };
         let mut scrollback = ScrollbackTracker::new();
 
@@ -5673,7 +5699,7 @@ done
             saved_visible_history_extent: None,
             saved_inline_screen_size: None,
             mouse_captured: false,
-            live_inline_viewport: None,
+            normal_screen_cleanup_top: 0,
         };
         let mut scrollback = ScrollbackTracker::new();
 
@@ -5746,7 +5772,7 @@ done
             saved_visible_history_extent: None,
             saved_inline_screen_size: None,
             mouse_captured: false,
-            live_inline_viewport: None,
+            normal_screen_cleanup_top: 0,
         };
         let mut scrollback = ScrollbackTracker::new();
         draw(
@@ -5909,7 +5935,7 @@ done
             saved_visible_history_extent: None,
             saved_inline_screen_size: None,
             mouse_captured: false,
-            live_inline_viewport: None,
+            normal_screen_cleanup_top: 0,
         };
         let mut scrollback = ScrollbackTracker::new();
 
@@ -5976,7 +6002,7 @@ done
             saved_visible_history_extent: None,
             saved_inline_screen_size: None,
             mouse_captured: false,
-            live_inline_viewport: None,
+            normal_screen_cleanup_top: 0,
         };
 
         guard
@@ -6017,6 +6043,48 @@ done
     }
 
     #[test]
+    fn startup_splash_rows_are_claimed_as_visible_history() {
+        let mut backend = RecordingBackend::new(80, 24);
+        // `splash::play` parks immediately below its 8-row canvas.
+        backend.cursor = Position { x: 0, y: 10 };
+        let mut terminal = InlineTerminal::new(backend).expect("recording terminal");
+
+        let cleanup_top = claim_startup_history(&mut terminal, 8);
+
+        assert_eq!(cleanup_top, 10);
+        assert_eq!(terminal.visible_history_rows(), 8);
+        assert_eq!(terminal.visible_history_bottom(), 10);
+    }
+
+    #[test]
+    fn transcript_appends_after_startup_splash_without_scrolling_the_logo() {
+        let mut backend = RecordingBackend::new(80, 40);
+        backend.cursor = Position { x: 0, y: 10 };
+        let mut terminal = InlineTerminal::new(backend).expect("recording terminal");
+        claim_startup_history(&mut terminal, 8);
+        terminal
+            .resize_viewport_to_size(6, Size::new(80, 40))
+            .expect("reserve bottom viewport");
+        let mark = terminal.backend().buf.len();
+
+        insert_history_lines_with_size(
+            &mut terminal,
+            vec![ratatui::text::Line::from("completed turn")],
+            Size::new(80, 40),
+        )
+        .expect("append transcript");
+
+        assert_eq!(terminal.visible_history_rows(), 9);
+        assert_eq!(terminal.visible_history_bottom(), 11);
+        let written = String::from_utf8_lossy(&terminal.backend().buf[mark..]);
+        assert!(written.contains("completed turn"));
+        assert!(
+            !written.contains("\u{1b}D"),
+            "free rows below the registered splash must be used before scrolling: {written:?}"
+        );
+    }
+
+    #[test]
     fn onboarding_alt_screen_exit_clears_the_saved_inline_viewport() {
         // First-launch Model A paints a short inline frame while launch/resolve
         // is in flight, then opens onboarding on the alternate screen. Exiting
@@ -6028,7 +6096,7 @@ done
             saved_visible_history_extent: Some((0, 19)),
             saved_inline_screen_size: Some(Size::new(80, 24)),
             mouse_captured: false,
-            live_inline_viewport: None,
+            normal_screen_cleanup_top: 19,
         };
         let mut written = Vec::new();
 
@@ -6060,7 +6128,7 @@ done
             saved_visible_history_extent: None,
             saved_inline_screen_size: None,
             mouse_captured: false,
-            live_inline_viewport: Some(Rect::new(0, 20, 80, 4)),
+            normal_screen_cleanup_top: 20,
         };
         let mut written = Vec::new();
 
@@ -6073,28 +6141,57 @@ done
     }
 
     #[test]
-    fn onboarding_alt_screen_exit_preserves_normal_screen_without_an_inline_frame() {
-        // When onboarding is the very first frame, the saved viewport is empty:
-        // there is no hidden TUI surface to erase, and clearing from its cursor
-        // anchor could instead delete first-install output owned by the shell.
+    fn onboarding_alt_screen_exit_clears_from_the_first_frame_anchor() {
+        // When onboarding is the first TUI frame, its saved inline viewport is
+        // empty, but the normal-screen region from the startup cursor downward
+        // is still process-owned. Clearing from that anchor preserves installer
+        // output above it while avoiding a full-screen blank band on exit.
         let guard = TerminalGuard {
             mode: RenderMode::AltScreen,
             saved_inline_viewport: Some(Rect::new(0, 6, 0, 0)),
             saved_visible_history_extent: Some((0, 0)),
             saved_inline_screen_size: Some(Size::new(80, 24)),
             mouse_captured: false,
-            live_inline_viewport: None,
+            normal_screen_cleanup_top: 6,
         };
         let mut written = Vec::new();
 
         guard.restore_render_surface_on_exit(&mut written);
 
         let written = String::from_utf8(written).expect("ANSI output");
-        assert!(written.contains("\u{1b}[?1049l"));
+        let leave_alt = written.find("\u{1b}[?1049l").expect("leave alt screen");
+        let move_to_anchor = written
+            .find("\u{1b}[7;1H")
+            .expect("move to first-frame anchor");
+        let clear_down = written.find("\u{1b}[J").expect("clear blank band");
+        assert!(leave_alt < move_to_anchor && move_to_anchor < clear_down);
+    }
+
+    #[test]
+    fn exit_clears_blank_gap_after_visible_history() {
+        let mut terminal =
+            InlineTerminal::new(RecordingBackend::new(80, 40)).expect("recording terminal");
+        terminal.set_viewport_area(Rect::new(0, 34, 80, 6));
+        terminal.set_visible_history_extent(10, 18);
+        let mut guard = TerminalGuard {
+            mode: RenderMode::Inline,
+            saved_inline_viewport: None,
+            saved_visible_history_extent: None,
+            saved_inline_screen_size: None,
+            mouse_captured: false,
+            normal_screen_cleanup_top: 8,
+        };
+        guard.track_inline_surface(&terminal);
+        let mut written = Vec::new();
+
+        guard.restore_render_surface_on_exit(&mut written);
+
+        let written = String::from_utf8(written).expect("ANSI output");
         assert!(
-            !written.contains("\u{1b}[J"),
-            "an empty saved viewport owns no normal-screen rows: {written:?}"
+            written.contains("\u{1b}[19;1H\u{1b}[J"),
+            "cleanup starts after retained history, not at the bottom-pinned viewport: {written:?}"
         );
+        assert!(!written.contains("\u{1b}[35;1H"));
     }
 
     #[test]
@@ -6117,7 +6214,7 @@ done
             saved_visible_history_extent: None,
             saved_inline_screen_size: None,
             mouse_captured: false,
-            live_inline_viewport: None,
+            normal_screen_cleanup_top: 0,
         };
 
         guard
@@ -6165,7 +6262,7 @@ done
             saved_visible_history_extent: None,
             saved_inline_screen_size: None,
             mouse_captured: false,
-            live_inline_viewport: None,
+            normal_screen_cleanup_top: 0,
         };
         let mut scrollback = ScrollbackTracker::new();
 
@@ -8128,7 +8225,7 @@ done
             saved_visible_history_extent: None,
             saved_inline_screen_size: None,
             mouse_captured: false,
-            live_inline_viewport: Some(terminal.viewport_area),
+            normal_screen_cleanup_top: terminal.viewport_area.top(),
         };
 
         let handed_off =
@@ -8168,7 +8265,7 @@ done
             saved_visible_history_extent: None,
             saved_inline_screen_size: None,
             mouse_captured: false,
-            live_inline_viewport: Some(terminal.viewport_area),
+            normal_screen_cleanup_top: terminal.viewport_area.top(),
         };
         guard.enter_alt_screen(&mut terminal).unwrap();
         guard.sync_mouse_capture(&mut terminal, true).unwrap();

@@ -102,11 +102,19 @@ estimate: 0.5d
   那么 先恢复 normal screen，再从保存的 inline viewport 顶部向下清除
   并且 shell prompt 不会落入上一轮 Composer 框中
 
-场景: onboarding 是首帧时保留安装输出
-  测试: onboarding_alt_screen_exit_preserves_normal_screen_without_an_inline_frame
+场景: onboarding 是首帧时从启动锚点清理
+  测试: onboarding_alt_screen_exit_clears_from_the_first_frame_anchor
   假设进入 alternate screen 前保存的 inline viewport 为空
   当 用户从 onboarding 直接退出进程
-  那么 只恢复 normal screen，不清除 shell 拥有的首次安装输出
+  那么 恢复 normal screen 后从 TUI 启动锚点向下清除
+  并且 锚点上方由 installer 与 shell 拥有的输出保持不变
+
+场景: 退出时收回历史与 Composer 之间的空白带
+  测试: exit_clears_blank_gap_after_visible_history
+  假设 已完成历史停在屏幕中部且 Composer 固定在底部
+  当 用户退出进程
+  那么 从已保留历史的末尾向下清除
+  并且 shell prompt 紧接历史而不是留下一整屏空白
 
 场景: 普通 inline 退出继续清理当前界面
   测试: inline_exit_still_clears_the_live_inline_viewport
