@@ -3482,6 +3482,34 @@ struct TerminalGuard {
 }
 
 impl TerminalGuard {
+    /// Restore the screen buffer and erase any inline viewport owned by this
+    /// process. An alternate-screen exit must clear the SAVED inline viewport:
+    /// `enter_alt_screen` deliberately sets `live_inline_viewport` to `None`,
+    /// but leaving the alternate screen reveals the normal-buffer composer that
+    /// was painted before the overlay opened.
+    fn restore_render_surface_on_exit<W: io::Write>(&self, stdout: &mut W) {
+        if self.mouse_captured {
+            let _ = execute!(stdout, DisableMouseCapture);
+        }
+        if self.mode == RenderMode::AltScreen {
+            let _ = execute!(stdout, LeaveAlternateScreen);
+        }
+        let viewport = match self.mode {
+            RenderMode::Inline => self.live_inline_viewport,
+            RenderMode::AltScreen => self.saved_inline_viewport,
+        };
+        // An empty saved viewport means the overlay was the first frame, so the
+        // normal buffer contains no TUI-owned rows and must be left untouched
+        // (for example, to preserve first-install output above the shell).
+        if let Some(viewport) = viewport.filter(|viewport| !viewport.is_empty()) {
+            let _ = execute!(
+                stdout,
+                crossterm::cursor::MoveTo(0, viewport.top()),
+                crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)
+            );
+        }
+    }
+
     /// Bring the terminal's mouse-capture state in line with the policy
     /// (`app::wants_mouse_capture`). Idempotent: only writes the escape
     /// sequence on an actual transition.
@@ -3573,26 +3601,7 @@ impl Drop for TerminalGuard {
         #[cfg(not(test))]
         {
             let mut stdout = io::stdout();
-            if self.mouse_captured {
-                let _ = execute!(stdout, DisableMouseCapture);
-            }
-            if self.mode == RenderMode::AltScreen {
-                let _ = execute!(stdout, LeaveAlternateScreen);
-            }
-            // Clear the inline viewport the TUI painted this session. Without
-            // this, the inline model leaves its last frames — status bar,
-            // composer hint, slash menu — fossilized in the user's scrollback
-            // on exit (and they resurface again whenever an alt-screen
-            // overlay drops back to the main screen). Finalized transcript
-            // lives ABOVE the viewport via `insert_history`, so clearing from
-            // the viewport top down only touches TUI-owned rows.
-            if let Some(viewport) = self.live_inline_viewport {
-                let _ = execute!(
-                    stdout,
-                    crossterm::cursor::MoveTo(0, viewport.top()),
-                    crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)
-                );
-            }
+            self.restore_render_surface_on_exit(&mut stdout);
             let _ = disable_raw_mode();
             let _ = execute!(stdout, DisableBracketedPaste, DisableFocusChange, Show);
         }
@@ -6005,6 +6014,87 @@ done
         let written = String::from_utf8_lossy(&terminal.backend().buf);
         assert!(written.contains("\u{1b}[?1049h"));
         assert!(written.contains("\u{1b}[?1049l"));
+    }
+
+    #[test]
+    fn onboarding_alt_screen_exit_clears_the_saved_inline_viewport() {
+        // First-launch Model A paints a short inline frame while launch/resolve
+        // is in flight, then opens onboarding on the alternate screen. Exiting
+        // directly from that overlay must erase the hidden composer after the
+        // normal screen is restored, or the shell prompt lands inside it.
+        let guard = TerminalGuard {
+            mode: RenderMode::AltScreen,
+            saved_inline_viewport: Some(Rect::new(0, 19, 80, 5)),
+            saved_visible_history_extent: Some((0, 19)),
+            saved_inline_screen_size: Some(Size::new(80, 24)),
+            mouse_captured: false,
+            live_inline_viewport: None,
+        };
+        let mut written = Vec::new();
+
+        guard.restore_render_surface_on_exit(&mut written);
+
+        let written = String::from_utf8(written).expect("ANSI output");
+        let leave_alt = written
+            .find("\u{1b}[?1049l")
+            .expect("exit leaves the onboarding alternate screen");
+        let move_to_saved_top = written
+            .find("\u{1b}[20;1H")
+            .expect("cursor moves to the saved inline viewport top");
+        let clear_down = written
+            .find("\u{1b}[J")
+            .expect("saved inline viewport is cleared");
+        assert!(
+            leave_alt < move_to_saved_top && move_to_saved_top < clear_down,
+            "normal screen must be restored before its stale inline viewport is cleared: {written:?}"
+        );
+    }
+
+    #[test]
+    fn inline_exit_still_clears_the_live_inline_viewport() {
+        // Keep the original #547 behavior pinned while sharing the teardown
+        // helper with the alternate-screen exit path.
+        let guard = TerminalGuard {
+            mode: RenderMode::Inline,
+            saved_inline_viewport: None,
+            saved_visible_history_extent: None,
+            saved_inline_screen_size: None,
+            mouse_captured: false,
+            live_inline_viewport: Some(Rect::new(0, 20, 80, 4)),
+        };
+        let mut written = Vec::new();
+
+        guard.restore_render_surface_on_exit(&mut written);
+
+        let written = String::from_utf8(written).expect("ANSI output");
+        assert!(!written.contains("\u{1b}[?1049l"));
+        assert!(written.contains("\u{1b}[21;1H"));
+        assert!(written.contains("\u{1b}[J"));
+    }
+
+    #[test]
+    fn onboarding_alt_screen_exit_preserves_normal_screen_without_an_inline_frame() {
+        // When onboarding is the very first frame, the saved viewport is empty:
+        // there is no hidden TUI surface to erase, and clearing from its cursor
+        // anchor could instead delete first-install output owned by the shell.
+        let guard = TerminalGuard {
+            mode: RenderMode::AltScreen,
+            saved_inline_viewport: Some(Rect::new(0, 6, 0, 0)),
+            saved_visible_history_extent: Some((0, 0)),
+            saved_inline_screen_size: Some(Size::new(80, 24)),
+            mouse_captured: false,
+            live_inline_viewport: None,
+        };
+        let mut written = Vec::new();
+
+        guard.restore_render_surface_on_exit(&mut written);
+
+        let written = String::from_utf8(written).expect("ANSI output");
+        assert!(written.contains("\u{1b}[?1049l"));
+        assert!(
+            !written.contains("\u{1b}[J"),
+            "an empty saved viewport owns no normal-screen rows: {written:?}"
+        );
     }
 
     #[test]
