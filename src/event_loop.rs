@@ -29,11 +29,11 @@ use ratatui::backend::{Backend, CrosstermBackend};
 
 use crate::{
     app,
-    cli::{Cli, Mode},
+    cli::Cli,
     client_event::ClientEvent,
     insert_history::insert_history_lines_with_size,
     menu::preview_layout,
-    model::{AppState, AppUiCommand, ApprovalModalAction, FocusPane, SessionRunState},
+    model::{AppState, AppUiCommand, ApprovalModalAction, FocusPane},
     store::Store,
     theme::Palette,
     transport::{AppUiBackend, build_backend},
@@ -55,9 +55,6 @@ const MAX_BACKEND_EVENTS_PER_TICK: usize = 512;
 /// momentum-scroll burst coalesces into one repaint, low enough that a
 /// pathological event stream cannot starve rendering.
 const MAX_INPUT_EVENTS_PER_TICK: usize = 64;
-/// Sentinel used after a normal exit has already replaced the TUI with its
-/// compact card. Drop still restores tty modes, but must not clear the card.
-const CLEAN_EXIT_RENDERED: u16 = u16::MAX;
 
 /// Which screen model the terminal is currently in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -211,14 +208,13 @@ pub fn run(cli: Cli) -> Result<()> {
     execute!(stdout, EnableBracketedPaste, EnableFocusChange)?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = InlineTerminal::new(backend)?;
-    let normal_screen_origin = terminal.viewport_area.top();
     let mut guard = TerminalGuard {
         mode: RenderMode::Inline,
         saved_inline_viewport: None,
         saved_visible_history_extent: None,
         saved_inline_screen_size: None,
         mouse_captured: false,
-        normal_screen_cleanup_top: normal_screen_origin,
+        normal_screen_cleanup_top: terminal.viewport_area.top(),
     };
     // Track the normal-screen cleanup anchor from frame one. Before transcript
     // history exists this is the launch cursor; afterwards it advances to the
@@ -499,12 +495,6 @@ pub fn run(cli: Cli) -> Result<()> {
         }
     }
 
-    let mut stdout = io::stdout();
-    let _ = guard.render_clean_exit(
-        &mut stdout,
-        normal_screen_origin,
-        &exit_summary(&store.state, &cli),
-    );
     drop(guard);
     Ok(())
 }
@@ -3468,92 +3458,6 @@ fn is_alt_char(key: &KeyEvent, expected: char) -> bool {
     )
 }
 
-/// Render a small, durable hand-off in place of the process-owned TUI canvas.
-/// The session id is the server's canonical reopen key; `--profile-id` is
-/// included when available so legacy, non-profile-prefixed keys also reopen in
-/// the correct profile. Mock sessions are synthetic and must not advertise a
-/// misleading resume command.
-fn exit_summary(app: &AppState, cli: &Cli) -> String {
-    let mut lines = vec![format!("╭─ >_ octoscode · {}", t!("app.exit_card.closed"))];
-
-    if let Some(session) = app.active_session() {
-        let session_id = sanitized_terminal_text(&session.id.0);
-        let title = sanitized_terminal_text(&session.title);
-        let title = if title.trim().is_empty() {
-            session_id.as_str()
-        } else {
-            title.trim()
-        };
-        let state = match &app.run_state {
-            SessionRunState::Idle => t!("app.status.idle"),
-            SessionRunState::InProgress => t!("app.status.working"),
-            SessionRunState::Blocked { .. } => t!("app.status.blocked"),
-            SessionRunState::Success => t!("app.status.done"),
-            SessionRunState::Error { .. } => t!("app.status.error"),
-        };
-        lines.push(format!(
-            "│ {}  {title} · {state}",
-            t!("app.exit_card.session")
-        ));
-
-        if cli.mode == Mode::Protocol
-            && let Some(session_arg) = shell_quote_arg(&session.id.0)
-        {
-            let mut command = format!("octoscode --session {session_arg}");
-            if let Some(profile_id) = session.profile_id.as_deref()
-                && let Some(profile_arg) = shell_quote_arg(profile_id)
-            {
-                command.push_str(" --profile-id ");
-                command.push_str(&profile_arg);
-            }
-            if cli.readonly {
-                command.push_str(" --readonly");
-            }
-            lines.push(format!("│ {}  {command}", t!("app.exit_card.resume")));
-        }
-    } else {
-        lines.push(format!("│ {}", t!("app.exit_card.no_session")));
-    }
-
-    lines.push("╰─".to_string());
-    format!("{}\r\n", lines.join("\r\n"))
-}
-
-/// Prevent backend-provided titles/ids from injecting terminal control
-/// sequences into the normal shell buffer. Tabs and line breaks collapse to a
-/// single space; every other C0/C1 control is dropped.
-fn sanitized_terminal_text(value: &str) -> String {
-    value
-        .chars()
-        .filter_map(|ch| match ch {
-            '\t' | '\r' | '\n' => Some(' '),
-            ch if ch.is_control() => None,
-            ch => Some(ch),
-        })
-        .collect()
-}
-
-/// Quote a displayed resume argument for the host's customary shell. Refuse
-/// controls entirely: a copy/paste affordance must never smuggle terminal or
-/// shell control bytes even if a remote backend returns a hostile session id.
-fn shell_quote_arg(value: &str) -> Option<String> {
-    if value.is_empty() || value.chars().any(char::is_control) {
-        return None;
-    }
-    if value
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || "-._/:@#".contains(ch))
-    {
-        return Some(value.to_string());
-    }
-
-    #[cfg(windows)]
-    return Some(format!("'{}'", value.replace('\'', "''")));
-
-    #[cfg(not(windows))]
-    Some(format!("'{}'", value.replace('\'', "'\"'\"'")))
-}
-
 /// Tracks the current screen model and restores terminal state on drop.
 struct TerminalGuard {
     mode: RenderMode,
@@ -3580,35 +3484,6 @@ struct TerminalGuard {
 }
 
 impl TerminalGuard {
-    /// Replace every normal-screen row owned by this process with the compact
-    /// hand-off card. This is called only after an intentional user exit; Drop
-    /// handles errors/panics conservatively from the rolling cleanup anchor.
-    fn render_clean_exit<W: io::Write>(
-        &mut self,
-        stdout: &mut W,
-        origin: u16,
-        summary: &str,
-    ) -> io::Result<()> {
-        if self.mouse_captured {
-            execute!(stdout, DisableMouseCapture)?;
-            self.mouse_captured = false;
-        }
-        if self.mode == RenderMode::AltScreen {
-            execute!(stdout, LeaveAlternateScreen)?;
-            self.mode = RenderMode::Inline;
-        }
-        stdout.write_all(b"\x1b[0m")?;
-        execute!(
-            stdout,
-            crossterm::cursor::MoveTo(0, origin),
-            crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)
-        )?;
-        stdout.write_all(summary.as_bytes())?;
-        stdout.flush()?;
-        self.normal_screen_cleanup_top = CLEAN_EXIT_RENDERED;
-        Ok(())
-    }
-
     /// Restore the screen buffer and erase any inline viewport owned by this
     /// process. `normal_screen_cleanup_top` is kept independently of the active
     /// screen buffer, so an alternate-screen exit can restore the normal buffer
@@ -3621,7 +3496,6 @@ impl TerminalGuard {
         if self.mode == RenderMode::AltScreen {
             let _ = execute!(stdout, LeaveAlternateScreen);
         }
-        let _ = stdout.write_all(b"\x1b[0m");
         let _ = execute!(
             stdout,
             crossterm::cursor::MoveTo(0, self.normal_screen_cleanup_top),
@@ -3734,12 +3608,9 @@ impl Drop for TerminalGuard {
         #[cfg(not(test))]
         {
             let mut stdout = io::stdout();
-            if self.normal_screen_cleanup_top != CLEAN_EXIT_RENDERED {
-                self.restore_render_surface_on_exit(&mut stdout);
-            }
+            self.restore_render_surface_on_exit(&mut stdout);
             let _ = disable_raw_mode();
             let _ = execute!(stdout, DisableBracketedPaste, DisableFocusChange, Show);
-            let _ = io::Write::flush(&mut stdout);
         }
     }
 }
@@ -6236,7 +6107,7 @@ done
     }
 
     #[test]
-    fn exit_cleanup_without_clean_exit_keeps_the_conservative_anchor() {
+    fn exit_clears_blank_gap_after_visible_history() {
         let mut terminal =
             InlineTerminal::new(RecordingBackend::new(80, 40)).expect("recording terminal");
         terminal.set_viewport_area(Rect::new(0, 34, 80, 6));
@@ -6260,70 +6131,6 @@ done
             "cleanup starts after retained history, not at the bottom-pinned viewport: {written:?}"
         );
         assert!(!written.contains("\u{1b}[35;1H"));
-    }
-
-    #[test]
-    fn clean_exit_replaces_the_full_tui_with_a_compact_session_card() {
-        let mut store = store_with_sessions(1);
-        let session = store.state.active_session_mut().expect("active session");
-        session.id = SessionKey("coding:local:tui#terminal-cleanup".into());
-        session.title = "terminal cleanup".into();
-        session.profile_id = Some("coding".into());
-        let cli = Cli::try_parse_from(["octoscode"]).expect("protocol cli");
-        let summary = exit_summary(&store.state, &cli);
-        let mut guard = TerminalGuard {
-            mode: RenderMode::AltScreen,
-            saved_inline_viewport: Some(Rect::new(0, 28, 100, 8)),
-            saved_visible_history_extent: Some((12, 20)),
-            saved_inline_screen_size: Some(Size::new(100, 36)),
-            mouse_captured: false,
-            normal_screen_cleanup_top: 20,
-        };
-        let mut written = Vec::new();
-
-        guard
-            .render_clean_exit(&mut written, 2, &summary)
-            .expect("render clean exit");
-
-        let written = String::from_utf8(written).expect("ANSI output");
-        let leave_alt = written.find("\u{1b}[?1049l").expect("leave alt screen");
-        let move_to_origin = written
-            .find("\u{1b}[3;1H")
-            .expect("return to the TUI launch anchor");
-        let clear_down = written.find("\u{1b}[J").expect("clear full TUI canvas");
-        let compact_card = written
-            .find(">_ octoscode")
-            .expect("write compact exit card");
-        assert!(leave_alt < move_to_origin);
-        assert!(move_to_origin < clear_down && clear_down < compact_card);
-        assert_eq!(guard.mode, RenderMode::Inline);
-        assert_eq!(guard.normal_screen_cleanup_top, CLEAN_EXIT_RENDERED);
-        assert!(!written.contains("Welcome to Octos"));
-    }
-
-    #[test]
-    fn exit_card_resume_command_uses_canonical_session_and_profile() {
-        let mut store = store_with_sessions(1);
-        let session = store.state.active_session_mut().expect("active session");
-        session.id = SessionKey("legacy local session".into());
-        session.title = "Resume me".into();
-        session.profile_id = Some("coding profile".into());
-
-        let protocol = Cli::try_parse_from(["octoscode", "--readonly"]).expect("protocol cli");
-        let summary = exit_summary(&store.state, &protocol);
-        assert!(
-            summary.contains(
-                "octoscode --session 'legacy local session' --profile-id 'coding profile' --readonly"
-            ),
-            "resume command must carry the canonical session, legacy profile, and access mode: {summary:?}"
-        );
-
-        let mock = Cli::try_parse_from(["octoscode", "--mode", "mock"]).expect("mock cli");
-        let mock_summary = exit_summary(&store.state, &mock);
-        assert!(
-            !mock_summary.contains("octoscode --session"),
-            "synthetic mock sessions are not durable resume targets: {mock_summary:?}"
-        );
     }
 
     #[test]

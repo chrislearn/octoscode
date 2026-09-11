@@ -186,12 +186,11 @@ octoscode 启动时（`backend_ensure` 之后、`event_loop::run` 接管终端�
   当 TUI 渲染首帧
   那么 只显示 in-viewport launch banner 的一个完整 OCTOS logo 与 Welcome back 问候
 
-场景: 退出时以紧凑卡片替换 welcome banner
-  测试: clean_exit_replaces_the_full_tui_with_a_compact_session_card
+场景: 退出时清理 welcome banner
+  测试: inline_exit_still_clears_the_live_inline_viewport
   假设 空会话 launch banner 与 Composer 位于 TUI 的 live inline viewport
   当 用户退出进程
-  那么 从 TUI 启动锚点向下清除且 shell 中不残留大幅 OCTOS banner
-  并且 仅留下紧凑会话卡片与恢复命令
+  那么 从 live viewport 顶部向下清除且 shell 中不残留大幅 OCTOS banner
 
 <!-- lint-ack: decision-coverage — ttfx git 依赖由 cargo build 本身机械验证，无需场景 -->
 <!-- lint-ack: precedence-fallback-coverage — 门控为无序 OR 组合而非优先级链，五个单条件场景已穷举 -->
