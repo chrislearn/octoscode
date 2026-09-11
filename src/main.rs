@@ -23,8 +23,8 @@ fn main() -> Result<()> {
     // Startup splash: ttfx-rendered logo on the main screen, before the event
     // loop claims the terminal. Gated (non-TTY/CI/--no-splash) and best-effort;
     // see specs/task-startup-splash.spec.
-    let splash_rows = octoscode::splash::play(&cli);
-    event_loop::run_with_startup_history(cli, splash_rows)
+    octoscode::splash::play(&cli);
+    event_loop::run(cli)
 }
 
 /// Chain a panic hook that restores the terminal before the (color_eyre)

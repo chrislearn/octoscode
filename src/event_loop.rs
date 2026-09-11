@@ -190,15 +190,6 @@ where
 }
 
 pub fn run(cli: Cli) -> Result<()> {
-    run_with_startup_history(cli, 0)
-}
-
-/// Run the TUI while claiming `startup_history_rows` immediately above the
-/// initial inline cursor. The startup splash parks below its settled canvas and
-/// passes that row count here, so finalized transcript output appends after the
-/// intact logo instead of treating it as unknown shell content and scrolling it
-/// apart one line at a time.
-pub fn run_with_startup_history(cli: Cli, startup_history_rows: u16) -> Result<()> {
     enable_raw_mode()?;
     // Warm the one-shot terminal background probe HERE — after raw mode is on
     // (so the OSC 11 reply isn't line-buffered or echoed) but BEFORE the input
@@ -217,14 +208,13 @@ pub fn run_with_startup_history(cli: Cli, startup_history_rows: u16) -> Result<(
     execute!(stdout, EnableBracketedPaste, EnableFocusChange)?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = InlineTerminal::new(backend)?;
-    let startup_history_bottom = claim_startup_history(&mut terminal, startup_history_rows);
     let mut guard = TerminalGuard {
         mode: RenderMode::Inline,
         saved_inline_viewport: None,
         saved_visible_history_extent: None,
         saved_inline_screen_size: None,
         mouse_captured: false,
-        normal_screen_cleanup_top: startup_history_bottom,
+        normal_screen_cleanup_top: terminal.viewport_area.top(),
     };
     // Track the normal-screen cleanup anchor from frame one. Before transcript
     // history exists this is the launch cursor; afterwards it advances to the
@@ -507,15 +497,6 @@ pub fn run_with_startup_history(cli: Cli, startup_history_rows: u16) -> Result<(
 
     drop(guard);
     Ok(())
-}
-
-fn claim_startup_history<B>(terminal: &mut InlineTerminal<B>, rows: u16) -> u16
-where
-    B: Backend + io::Write,
-{
-    let bottom = terminal.viewport_area.top();
-    terminal.set_visible_history_extent(rows.min(bottom), bottom);
-    bottom
 }
 
 /// Draw one frame. In `Inline` mode this flushes newly-finalized history into
@@ -6040,48 +6021,6 @@ done
         let written = String::from_utf8_lossy(&terminal.backend().buf);
         assert!(written.contains("\u{1b}[?1049h"));
         assert!(written.contains("\u{1b}[?1049l"));
-    }
-
-    #[test]
-    fn startup_splash_rows_are_claimed_as_visible_history() {
-        let mut backend = RecordingBackend::new(80, 24);
-        // `splash::play` parks immediately below its 8-row canvas.
-        backend.cursor = Position { x: 0, y: 10 };
-        let mut terminal = InlineTerminal::new(backend).expect("recording terminal");
-
-        let cleanup_top = claim_startup_history(&mut terminal, 8);
-
-        assert_eq!(cleanup_top, 10);
-        assert_eq!(terminal.visible_history_rows(), 8);
-        assert_eq!(terminal.visible_history_bottom(), 10);
-    }
-
-    #[test]
-    fn transcript_appends_after_startup_splash_without_scrolling_the_logo() {
-        let mut backend = RecordingBackend::new(80, 40);
-        backend.cursor = Position { x: 0, y: 10 };
-        let mut terminal = InlineTerminal::new(backend).expect("recording terminal");
-        claim_startup_history(&mut terminal, 8);
-        terminal
-            .resize_viewport_to_size(6, Size::new(80, 40))
-            .expect("reserve bottom viewport");
-        let mark = terminal.backend().buf.len();
-
-        insert_history_lines_with_size(
-            &mut terminal,
-            vec![ratatui::text::Line::from("completed turn")],
-            Size::new(80, 40),
-        )
-        .expect("append transcript");
-
-        assert_eq!(terminal.visible_history_rows(), 9);
-        assert_eq!(terminal.visible_history_bottom(), 11);
-        let written = String::from_utf8_lossy(&terminal.backend().buf[mark..]);
-        assert!(written.contains("completed turn"));
-        assert!(
-            !written.contains("\u{1b}D"),
-            "free rows below the registered splash must be used before scrolling: {written:?}"
-        );
     }
 
     #[test]

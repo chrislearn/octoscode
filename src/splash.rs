@@ -196,8 +196,8 @@ impl SplashSession {
     /// Drive the effect to completion, `should_stop`, or error. Always ends by
     /// painting the plain input text into the canvas area (deterministic final
     /// state) and returning the cursor to the canvas TOP row so the settled
-    /// hold displays a stable complete frame. The production caller parks below
-    /// the canvas only after that hold.
+    /// hold displays a stable complete frame. The production caller clears the
+    /// transient canvas from that position before the TUI takes over.
     ///
     /// Raw-mode safe: rows are repositioned with `\r` + cursor-up instead of
     /// relying on cooked-mode `\n` (ttfx frames join rows with bare `\n`).
@@ -266,17 +266,14 @@ impl SplashSession {
         result.map(|_| stats)
     }
 
-    /// Finish the production handoff by parking the cursor immediately below
-    /// the settled splash. The event loop can then register those rows as
-    /// visible history instead of mistaking the cursor-at-top handoff for an
-    /// empty inline viewport and later scrolling the logo apart.
-    fn park_below_canvas(&self, out: &mut impl Write) -> Result<()> {
-        let down = self.rows.saturating_sub(1);
-        if down > 0 {
-            write!(out, "\x1b[{down}B").wrap_err("splash: cursor to canvas bottom")?;
-        }
-        out.write_all(b"\r\n")
-            .wrap_err("splash: park below canvas")?;
+    /// Remove the settled animation before the inline TUI takes over. `run`
+    /// leaves the cursor at the canvas top, so clearing downward erases the
+    /// whole transient splash and lets the TUI's own empty-session banner reuse
+    /// the same terminal region. The animation therefore never remains beside
+    /// the TUI banner and leaves no large artifact after exit.
+    fn clear_canvas(&self, out: &mut impl Write) -> Result<()> {
+        out.write_all(b"\r\x1b[J")
+            .wrap_err("splash: clear settled canvas")?;
         out.flush().wrap_err("splash: handoff flush")
     }
 
@@ -320,12 +317,11 @@ impl SplashSession {
     }
 }
 
-/// Play the startup splash if gating allows, returning the number of settled
-/// rows parked above the cursor for the event loop to claim as visible history.
-/// Every failure is swallowed: the splash is decoration and must never block
-/// or delay startup beyond its own deadline (specs/task-startup-splash.spec:
-/// 失败静默).
-pub fn play(cli: &crate::cli::Cli) -> u16 {
+/// Play the startup splash if gating allows. The animation canvas is cleared
+/// before returning; every failure is swallowed because the splash is
+/// decoration and must never block or delay startup beyond its own deadline
+/// (specs/task-startup-splash.spec: 失败静默).
+pub fn play(cli: &crate::cli::Cli) {
     use std::io::IsTerminal;
 
     let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((0, 0));
@@ -338,12 +334,12 @@ pub fn play(cli: &crate::cli::Cli) -> u16 {
         term_rows,
     };
     if !should_play(&gate) {
-        return 0;
+        return;
     }
-    play_inner(&cli.theme).unwrap_or(0)
+    let _ = play_inner(&cli.theme);
 }
 
-fn play_inner(theme: &crate::cli::ThemeName) -> Result<u16> {
+fn play_inner(theme: &crate::cli::ThemeName) -> Result<()> {
     let seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| u64::from(d.subsec_nanos()) ^ d.as_secs())
@@ -398,23 +394,27 @@ fn play_inner(theme: &crate::cli::ThemeName) -> Result<u16> {
     // starts from the CURRENT cursor row — jumping to screen row 0 would paint
     // the splash over shell scrollback. The splash plays from that cursor row;
     // `run()` returns to the canvas top for the settled hold, then the handoff
-    // parks below the complete canvas so the event loop can claim it as history.
+    // clears the transient canvas so the TUI can reuse the region.
 
     let deadline = std::time::Instant::now() + SPLASH_DEADLINE;
-    let stats = session.run(&mut stdout, || {
+    let run_result = session.run(&mut stdout, || {
         std::time::Instant::now() >= deadline || key_or_resize_pending()
-    })?;
+    });
 
     // Hold the settled logo for a beat before the TUI takes over — a skipped
     // run means the user is in a hurry, so no hold there.
-    if !stats.truncated {
+    if run_result.as_ref().is_ok_and(|stats| !stats.truncated) {
         let hold_until = std::time::Instant::now() + SPLASH_HOLD;
         while std::time::Instant::now() < hold_until && !key_or_resize_pending() {
             std::thread::sleep(std::time::Duration::from_millis(15));
         }
     }
-    session.park_below_canvas(&mut stdout)?;
-    Ok(session.rows)
+    // Even an engine error may have painted part of a frame. The cursor
+    // restoration in `run` leaves us at the canvas top, so always attempt the
+    // cleanup before propagating the (ultimately swallowed) error.
+    let clear_result = session.clear_canvas(&mut stdout);
+    run_result?;
+    clear_result
 }
 
 /// Drain pending terminal events; any key press or resize stops the splash.
@@ -559,7 +559,7 @@ mod tests {
     #[test]
     fn run_leaves_cursor_on_canvas_top_row() {
         // The animation driver returns to the canvas top so the settled frame
-        // is stable during the hold. The production handoff parks below it in
+        // is stable during the hold. The production handoff clears it from
         // a separate, testable step. Verify run()'s tail:
         // after the final paint's trailing `\r`, the last escape is
         // `\x1b[{rows-1}A\r` (cursor up to the canvas top, then home) — and
@@ -588,19 +588,17 @@ mod tests {
     }
 
     #[test]
-    fn splash_handoff_parks_below_the_complete_canvas() {
+    fn splash_handoff_clears_the_transient_canvas() {
         let session = SplashSession::new(&["beams"], "AB\nCD", test_opts(), 10, String::new())
             .expect("session builds");
         let mut out = Vec::new();
 
-        session
-            .park_below_canvas(&mut out)
-            .expect("handoff succeeds");
+        session.clear_canvas(&mut out).expect("handoff succeeds");
 
         assert_eq!(
             String::from_utf8(out).expect("ANSI output"),
-            "\x1b[1B\r\n",
-            "handoff moves from the canvas top to the row immediately below it"
+            "\r\x1b[J",
+            "handoff erases the splash from its top without moving the cursor"
         );
     }
 }

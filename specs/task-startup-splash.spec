@@ -7,12 +7,12 @@ estimate: 1d
 
 ## 意图
 
-octoscode 启动时（`backend_ensure` 之后、`event_loop::run_with_startup_history` 接管终端之前）在主屏播放
+octoscode 启动时（`backend_ensure` 之后、`event_loop::run` 接管终端之前）在主屏播放
 一段 OCTOS ASCII logo 动画，用 [ttfx](https://github.com/omacom-io/ttfx) 引擎的公开
 原语（`Effect::build`/`next_frame` + `Terminal` 帧原语）在 octos-tui 侧自建帧循环渲染。
 每次启动从精选效果列表随机抽一个并**自然播完**（精选成员以自然时长 ~1.7–4.5s 为准入
-标准），按键可随时跳过，8000ms 仅作防挂安全网；结束时（无论跑完还是截断）在原地留下
-完整 logo + 版本号作为 banner，自然跑完后停顿 450ms 再进入 TUI（按键可打断停顿）。
+标准），按键可随时跳过，8000ms 仅作防挂安全网；结束时（无论跑完还是截断）在原地显示
+完整 logo + 版本号，自然跑完后停顿 450ms（按键可打断停顿），随后清除动画画布再进入 TUI。
 动画是纯装饰，任何失败都静默跳过，绝不阻断启动。
 
 ## 已定决策
@@ -21,8 +21,8 @@ octoscode 启动时（`backend_ensure` 之后、`event_loop::run_with_startup_hi
   （pin 到当前 main tip），`.cargo/config.toml.example` 补一段 patch 到本地
   `../consult/ttfx` 的示例——与 `octos-core` 的 git-dep + 本地 patch 模式一致。
   新增依赖的正当理由：本任务即为集成该引擎；ttfx 自身仅依赖 clap + terminal_size。
-- **挂载点**：`src/main.rs` 中 `backend_ensure::ensure_octos_backend` 之后调用
-  `splash::play(&cli)`，再把行数交给 `event_loop::run_with_startup_history`；`update`/`doctor` 在更早的
+- **挂载点**：`src/main.rs` 中 `backend_ensure::ensure_octos_backend` 之后、
+  `event_loop::run(cli)` 之前调用 `splash::play(&cli)`；`update`/`doctor` 在更早的
   `cmd::dispatch` 已退出，天然不播。
 - **门控**：`splash::should_play(inputs) -> bool` 为纯函数（入参打包 no_splash 标志、
   `OCTOSCODE_NO_SPLASH` 环境变量、stdout `IsTerminal`、`CI` 环境变量、终端宽高与 logo
@@ -45,21 +45,23 @@ octoscode 启动时（`backend_ensure` 之后、`event_loop::run_with_startup_hi
   再返回。播放期间临时开 raw mode（防按键回显），RAII guard 保证异常路径也关闭
   raw mode 并恢复光标。
 - **终态**：循环结束后统一原样打印完整 logo 文本（默认前景色），使截断与跑完的
-  视觉终态一致；banner 留在 scrollback，与 inline scrollback 模型不冲突。
+  视觉终态一致；hold 结束后从画布顶行向下清除，动画不进入 scrollback，也不残留到退出后。
 - **失败静默**：`splash::play` 返回 `()`，内部 `run` 的任何 `Err`（引擎错误、IO 错误、
-  终端探测失败）都被吞掉，启动继续。
+  终端探测失败）都被吞掉，启动继续；run 已经绘制部分帧时仍尽力清理动画画布。
 - **块居中（ANSI 免疫）**：`block_pad` 在 `SplashSession::new()` 里按**最终文本**宽度
   （`text_dimensions(text)`）一次算定并存字段；`paint()` 只用 `self.block_pad`、绝不
   按 frame 测宽——ttfx 帧携带 SGR 颜色序列，其可打印字符会把 `UnicodeWidthStr::width`
   撑到数百列、使 pad 坍缩为 0。块内窄行保持左对齐，对齐主 banner 的 figlet 居中
   （`{art:<fig_w$}` + `centered()`）。
 - **平滑斜接（inline viewport 坐标系）**：不使用 `MoveTo(0,0)`——splash 从 shell
-  当前光标行开始。`run()` 结束后先回到画布顶行稳定展示终态；450ms hold 结束后，生产
-  handoff 再把光标停到完整画布的下一行，并把 splash 行数交给 event loop 登记为可见历史。
-  后续 transcript 因而追加在完整 logo 后面，不会把未登记的 logo 逐行滚残。
+  当前光标行开始。`run()` 结束后回到画布顶行稳定展示终态；450ms hold 结束后从该位置
+  `Clear(FromCursorDown)`，让 event loop 与空会话 launch banner 复用同一片终端区域。
 - **LOGO 与 banner 一致**：`LOGO` 常量与 `app::ONBOARDING_LOGO_ART` 运行时逐字节相等
   （`\` 行延续吃掉下一行全部前导空白的行为两边一致）；`splash_text()` 的版本行无硬编码
   缩进（居中由 `paint()` 统一处理，硬编码缩进会重复计算偏移）。
+- **只展示一次且退出不残留**：startup splash 是过场动画，交接前清除；进入 TUI 后仅由
+  空会话的 in-viewport launch banner 展示 OCTOS。该 banner 属于 live viewport，退出时随
+  Composer 一起清除，真实 transcript 仍按 inline scrollback 合约保留。
 
 ## 边界
 
@@ -171,19 +173,24 @@ octoscode 启动时（`backend_ensure` 之后、`event_loop::run_with_startup_hi
   那么 输出尾部是上移一行加回车（\x1b[1A\r）而非换行 park
   并且 hold 阶段可在画布顶行稳定展示 splash 终态
 
-场景: 生产 handoff 停在完整画布下方
-  测试: splash_handoff_parks_below_the_complete_canvas
+场景: 生产 handoff 清除动画画布
+  测试: splash_handoff_clears_the_transient_canvas
   假设 一个 2 行 splash 已经在画布顶行完成终态展示
   当 执行 splash 到 event loop 的生产 handoff
-  那么 光标下移到画布底行并换行到画布之后
-  并且 event loop 可把两行完整 splash 登记为可见历史
+  那么 从当前画布顶行向下清除且不移动光标
+  并且 event loop 可复用该区域渲染唯一的空会话 launch banner
 
-场景: 首条 transcript 追加在完整 splash 之后
-  测试: transcript_appends_after_startup_splash_without_scrolling_the_logo
-  假设 event loop 已把 8 行 splash 登记为可见历史且屏幕仍有空余
-  当 第一条完成历史写入 normal buffer
-  那么 历史直接追加在 splash 之后
-  并且 不触发逐行上滚而裁掉 logo 顶部
+场景: TUI 空会话仍显示一个完整 welcome banner
+  测试: render_launch_banner_shows_box_logo_and_greeting_on_empty_session
+  假设 startup splash 已在 handoff 时清除且当前会话为空
+  当 TUI 渲染首帧
+  那么 只显示 in-viewport launch banner 的一个完整 OCTOS logo 与 Welcome back 问候
+
+场景: 退出时清理 welcome banner
+  测试: inline_exit_still_clears_the_live_inline_viewport
+  假设 空会话 launch banner 与 Composer 位于 TUI 的 live inline viewport
+  当 用户退出进程
+  那么 从 live viewport 顶部向下清除且 shell 中不残留大幅 OCTOS banner
 
 <!-- lint-ack: decision-coverage — ttfx git 依赖由 cargo build 本身机械验证，无需场景 -->
 <!-- lint-ack: precedence-fallback-coverage — 门控为无序 OR 组合而非优先级链，五个单条件场景已穷举 -->
