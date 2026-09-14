@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 //! olp-review-monitor 生产入口集成测试(spec: review-monitor rules)。
 //! 子进程真实调用 scripts/olp-review-monitor.py。测试方法:
 //! spawn → 等 ready 基线(已有输出) → 变更 → 限时轮询/try_wait →

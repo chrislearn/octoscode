@@ -5338,14 +5338,13 @@ impl Store {
             self.refresh_active_menu_if_open();
             return;
         }
-        let canonical = std::fs::canonicalize(&path)
-            .map(|canonical| canonical.to_string_lossy().into_owned())
-            .unwrap_or_else(|_| target.clone());
-        // Reject obvious root-escape attempts: a workspace MUST NOT
-        // be `/`, the user's home root, or contain `..` after
-        // canonicalisation. The backend will re-validate but the
-        // TUI should reject the worst cases up front.
-        if canonical == "/" || canonical.is_empty() {
+        let canonical_path = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        let canonical = canonical_path.to_string_lossy().into_owned();
+        // Reject filesystem roots structurally instead of comparing with `/`:
+        // Windows canonicalizes a drive root to a path such as `\\?\C:\`.
+        // The backend will re-validate, but the TUI should reject this broad
+        // scope up front on every supported platform.
+        if canonical_path.as_os_str().is_empty() || canonical_path.parent().is_none() {
             self.state.onboarding.workspace_validation =
                 crate::model::OnboardingWorkspaceValidation::Invalid {
                     reason: t!("status.workspace_cannot_be_root").into_owned(),
@@ -28649,7 +28648,7 @@ now analyzing the bus module"
             other => panic!("expected Valid validation for '.', got: {other:?}"),
         };
         assert!(
-            canonical.starts_with('/'),
+            std::path::Path::new(&canonical).is_absolute(),
             "canonical path must be absolute, got: {canonical}"
         );
 
