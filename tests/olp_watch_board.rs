@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 //! Contract tests for `scripts/olp-watch-board.sh` (the OLP board sentinel).
 //!
 //! Pins the "唯一合法配方": a line-count baseline taken at arm time confines the
