@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 //! Unified validation-environment regression tests.
 //!
 //! Real-subprocess checks for `scripts/verify.sh`:

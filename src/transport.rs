@@ -3096,24 +3096,26 @@ pub(crate) fn install_local_shell_parent_signal_shield() -> std::io::Result<()> 
     static INSTALL_ERROR: OnceLock<Option<String>> = OnceLock::new();
     let error = INSTALL_ERROR.get_or_init(|| {
         let intercepted = Arc::new(AtomicBool::new(false));
-        signal_hook::flag::register(
+        let sigint_error = signal_hook::flag::register(
             signal_hook::consts::signal::SIGINT,
             Arc::clone(&intercepted),
         )
         .err()
-        .map(|err| format!("failed to shield parent from SIGINT: {err}"))
-        .or_else(|| {
-            #[cfg(not(windows))]
-            {
-                signal_hook::flag::register(signal_hook::consts::signal::SIGQUIT, intercepted)
-                    .err()
-                    .map(|err| format!("failed to shield parent from SIGQUIT: {err}"))
-            }
-            #[cfg(windows)]
-            {
-                None
-            }
-        })
+        .map(|err| format!("failed to shield parent from SIGINT: {err}"));
+        if sigint_error.is_some() {
+            return sigint_error;
+        }
+
+        #[cfg(not(windows))]
+        {
+            signal_hook::flag::register(signal_hook::consts::signal::SIGQUIT, intercepted)
+                .err()
+                .map(|err| format!("failed to shield parent from SIGQUIT: {err}"))
+        }
+        #[cfg(windows)]
+        {
+            None
+        }
     });
 
     match error {
