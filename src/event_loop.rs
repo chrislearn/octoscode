@@ -1673,7 +1673,7 @@ fn handle_paste(store: &mut Store, text: &str) -> KeyAction {
     // free-text box active, detail viewers, activity navigator): dropping the
     // paste with a visible status beats silently editing the hidden composer.
     if modal_owns_keyboard(store) {
-        store.state.status = "Paste ignored while a dialog is open".to_string();
+        store.state.status = t!("status.paste_ignored_dialog_open").into_owned();
         return KeyAction::Continue;
     }
 

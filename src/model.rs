@@ -2814,7 +2814,7 @@ impl OnboardingWizardState {
             return Err(OnboardingLocalProfileRecovery {
                 kind: OnboardingLocalProfileErrorKind::InvalidField,
                 focus_field: OnboardingLocalProfileField::RequestedId,
-                message: "Name this profile first. Use /onboard profile-name <id>.".into(),
+                message: t!("onboarding.validation.profile_name_required").into_owned(),
             });
         }
         Ok(())
@@ -3160,14 +3160,14 @@ impl OnboardingWizardState {
             return Err(OnboardingLocalProfileRecovery {
                 kind: OnboardingLocalProfileErrorKind::InvalidField,
                 focus_field: OnboardingLocalProfileField::Name,
-                message: "Display name is required. Use /onboard name <display name>.".into(),
+                message: t!("onboarding.validation.display_name_required").into_owned(),
             });
         }
         if name.chars().count() > 128 {
             return Err(OnboardingLocalProfileRecovery {
                 kind: OnboardingLocalProfileErrorKind::InvalidField,
                 focus_field: OnboardingLocalProfileField::Name,
-                message: "Display name must be 128 characters or fewer.".into(),
+                message: t!("onboarding.validation.display_name_too_long").into_owned(),
             });
         }
 
@@ -3176,14 +3176,14 @@ impl OnboardingWizardState {
             return Err(OnboardingLocalProfileRecovery {
                 kind: OnboardingLocalProfileErrorKind::InvalidField,
                 focus_field: OnboardingLocalProfileField::Username,
-                message: "Username is required. Use /onboard username <handle>.".into(),
+                message: t!("onboarding.validation.username_required").into_owned(),
             });
         }
         if username.len() > 64 {
             return Err(OnboardingLocalProfileRecovery {
                 kind: OnboardingLocalProfileErrorKind::InvalidField,
                 focus_field: OnboardingLocalProfileField::Username,
-                message: "Username must be 64 characters or fewer.".into(),
+                message: t!("onboarding.validation.username_too_long").into_owned(),
             });
         }
         if username
@@ -3193,7 +3193,7 @@ impl OnboardingWizardState {
             return Err(OnboardingLocalProfileRecovery {
                 kind: OnboardingLocalProfileErrorKind::InvalidField,
                 focus_field: OnboardingLocalProfileField::Username,
-                message: "Username must be ASCII without whitespace or control characters.".into(),
+                message: t!("onboarding.validation.username_invalid_chars").into_owned(),
             });
         }
 
@@ -3202,16 +3202,14 @@ impl OnboardingWizardState {
             return Err(OnboardingLocalProfileRecovery {
                 kind: OnboardingLocalProfileErrorKind::InvalidField,
                 focus_field: OnboardingLocalProfileField::Email,
-                message: "Email is required by the backend. Use /onboard email <address>.".into(),
+                message: t!("onboarding.validation.email_required").into_owned(),
             });
         }
         if !looks_like_email(email) {
             return Err(OnboardingLocalProfileRecovery {
                 kind: OnboardingLocalProfileErrorKind::InvalidField,
                 focus_field: OnboardingLocalProfileField::Email,
-                message:
-                    "Email must contain a non-empty local-part and domain (e.g. ada@example.com)."
-                        .into(),
+                message: t!("onboarding.validation.email_invalid").into_owned(),
             });
         }
 
@@ -3245,9 +3243,12 @@ impl OnboardingWizardState {
                 // existing-owner collision (username, email metadata,
                 // or owner id), with the reason in the message. Keep
                 // that reason rather than hard-coding "username taken".
-                message: format!(
-                    "Local profile collision for '{collided_username}': {server_reason}. Edit the fields with /onboard name|username|email and try again."
-                ),
+                message: t!(
+                    "onboarding.validation.profile_collision",
+                    username = collided_username,
+                    reason = server_reason
+                )
+                .into_owned(),
             },
             "profile_local_unsupported" => OnboardingLocalProfileRecovery {
                 kind: OnboardingLocalProfileErrorKind::Unsupported,
@@ -3258,29 +3259,34 @@ impl OnboardingWizardState {
                 // returning `profile_local_unsupported` despite
                 // advertising the method is misconfigured, not a
                 // signal that the user can fall back to OTP locally.
-                message: "This server returned profile_local_unsupported for profile/local/create. The backend is misconfigured — restart the server with local solo onboarding enabled, or connect to a backend that fully supports it."
-                    .into(),
+                message: t!("onboarding.validation.local_profile_unsupported").into_owned(),
             },
             "profile_local_invalid_name" => OnboardingLocalProfileRecovery {
                 kind: OnboardingLocalProfileErrorKind::InvalidParams,
                 focus_field: OnboardingLocalProfileField::Name,
-                message: format!(
-                    "Server rejected the display name: {server_reason}. Edit it with /onboard name <display name>."
-                ),
+                message: t!(
+                    "onboarding.validation.server_rejected_name",
+                    reason = server_reason
+                )
+                .into_owned(),
             },
             "profile_local_invalid_username" => OnboardingLocalProfileRecovery {
                 kind: OnboardingLocalProfileErrorKind::InvalidParams,
                 focus_field: OnboardingLocalProfileField::Username,
-                message: format!(
-                    "Server rejected the username: {server_reason}. Edit it with /onboard username <handle>."
-                ),
+                message: t!(
+                    "onboarding.validation.server_rejected_username",
+                    reason = server_reason
+                )
+                .into_owned(),
             },
             "profile_local_invalid_email" => OnboardingLocalProfileRecovery {
                 kind: OnboardingLocalProfileErrorKind::InvalidParams,
                 focus_field: OnboardingLocalProfileField::Email,
-                message: format!(
-                    "Server rejected the email: {server_reason}. Edit it with /onboard email <address>."
-                ),
+                message: t!(
+                    "onboarding.validation.server_rejected_email",
+                    reason = server_reason
+                )
+                .into_owned(),
             },
             "invalid_params" => OnboardingLocalProfileRecovery {
                 kind: OnboardingLocalProfileErrorKind::InvalidParams,
@@ -3288,14 +3294,20 @@ impl OnboardingWizardState {
                 // which field is at fault; default to username because
                 // collision is the highest-prior real-world cause.
                 focus_field: OnboardingLocalProfileField::Username,
-                message: format!(
-                    "Server rejected the profile fields as invalid: {server_reason}. Edit them with /onboard name|username|email."
-                ),
+                message: t!(
+                    "onboarding.validation.server_rejected_fields",
+                    reason = server_reason
+                )
+                .into_owned(),
             },
             _ => OnboardingLocalProfileRecovery {
                 kind: OnboardingLocalProfileErrorKind::InvalidParams,
                 focus_field: OnboardingLocalProfileField::Username,
-                message: format!("profile/local/create failed: {server_reason}"),
+                message: t!(
+                    "onboarding.validation.local_profile_create_failed",
+                    reason = server_reason
+                )
+                .into_owned(),
             },
         };
         self.local_profile_create_pending = false;
