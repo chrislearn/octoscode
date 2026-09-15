@@ -23,19 +23,34 @@ request.
 ## Development setup
 
 Install the stable Rust toolchain supported by `Cargo.toml` (Rust 1.85 or
-newer), fork the repository, then clone and verify your fork:
+newer). The full Unix validation suite also requires Bash, Python, and the
+pinned `agent-spec` CLI:
+
+```bash
+cargo install agent-spec --version 1.4.0 --locked
+```
+
+On macOS, install GNU `stat` and `flock` as well:
+
+```bash
+brew install coreutils flock
+```
+
+Then fork the repository, clone it, and verify your fork:
 
 ```bash
 git clone https://github.com/YOUR-USER/octoscode.git
 cd octoscode
 git remote add upstream https://github.com/octos-org/octoscode.git
-cargo test --all-targets
+scripts/verify.sh -- cargo test --all-targets
 ```
 
+The wrapper configures the subprocess environment, including locating
+Homebrew's GNU coreutils on macOS, but does not install these prerequisites.
 The normal test suite is mock-backed and does not need an Octos server. A few
-operational OLP tests execute Bash, GNU tools, and Python modules available on
-Unix; those targets are intentionally not run on native Windows. Portable Rust
-tests must continue to compile and pass on Windows.
+operational OLP tests execute Unix-only tooling; those targets are intentionally
+not run on native Windows. Portable Rust tests must continue to compile and
+pass on Windows.
 
 ## Making a change
 
@@ -47,10 +62,10 @@ tests must continue to compile and pass on Windows.
 5. Run the required checks:
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
-cargo test --all-targets
-cargo test --doc
+scripts/verify.sh -- cargo fmt --all --check
+scripts/verify.sh -- cargo clippy --all-targets -- -D warnings
+scripts/verify.sh -- cargo test --all-targets
+scripts/verify.sh -- cargo test --doc
 ```
 
 Do not commit generated build output, credentials, provider keys, access
