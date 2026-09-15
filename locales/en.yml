@@ -730,7 +730,7 @@ status:
   path_not_directory: "path '%{target}' is not a directory"
   workspace_not_directory: "Workspace '%{target}' is not a directory"
   workspace_cannot_be_root: "workspace cannot be the filesystem root"
-  workspace_cannot_be_root_status: "Workspace cannot be /; stage a project directory"
+  workspace_cannot_be_root_status: "Workspace cannot be a filesystem root; stage a project directory"
   workspace_writable: "writable"
   workspace_read_only: "read-only"
   workspace_has_toml: " (has .octos-workspace.toml)"

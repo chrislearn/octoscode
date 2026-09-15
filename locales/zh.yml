@@ -1492,7 +1492,7 @@ status:
   path_not_directory: "路径 '%{target}' 不是目录"
   workspace_not_directory: "工作区 '%{target}' 不是目录"
   workspace_cannot_be_root: "工作区不能是文件系统根目录"
-  workspace_cannot_be_root_status: "工作区不能为 /；请暂存一个项目目录"
+  workspace_cannot_be_root_status: "工作区不能是文件系统根目录；请暂存一个项目目录"
   workspace_writable: "可写"
   workspace_read_only: "只读"
   workspace_has_toml: "（含 .octos-workspace.toml）"
