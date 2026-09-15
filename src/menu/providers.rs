@@ -2581,7 +2581,8 @@ fn provider_config_rows(
     current_profile: Option<&str>,
     opts: ProviderConfigRowOpts,
 ) -> Vec<MenuItem> {
-    let saved_primary = onboarding_saved_primary(ctx, state, current_profile);
+    let saved_state = onboarding_saved_llm_state(ctx, state, current_profile);
+    let saved_primary = saved_state.and_then(|llm| llm.primary_provider());
 
     // Profile↔model decoupling (user feedback: "collapse to one Add model").
     // The detailed model config stays behind a single "Add a model" entry. It
@@ -2600,11 +2601,26 @@ fn provider_config_rows(
     // still expand (add another / fallback).
     let staged_label = state.provider_label();
     let staged_is_saved_primary = has_staged
-        && (state.saved_primary_provider_label.as_deref() == Some(staged_label.as_str())
-            || saved_primary.is_some_and(|saved| {
-                saved.family_id.as_deref() == Some(state.provider.family_id.trim())
-                    && saved.model_id.as_deref() == Some(state.provider.model_id.trim())
-            }));
+        && match saved_state {
+            // Once a matching profile/llm snapshot exists, it is authoritative:
+            // a local label from an earlier save must not resurrect a provider
+            // that the server says was deleted.
+            Some(_) => saved_primary.is_some_and(|saved| {
+                saved_family_id(saved) == Some(state.provider.family_id.trim())
+                    && saved_model_id(saved) == Some(state.provider.model_id.trim())
+                    // The server normalizes an absent route id to its
+                    // synthetic default address, `official`, when comparing
+                    // configured selections. Mirror that rule here so older
+                    // saved profiles without an explicit route still collapse
+                    // as the selected official primary.
+                    && saved_route_id(saved).unwrap_or("official")
+                        == non_empty(&state.provider.route.route_id).unwrap_or("official")
+            }),
+            // Immediately after an applied save, older servers may omit the
+            // list echo. Retain the local label fallback only until authoritative
+            // server state is available.
+            None => state.saved_primary_provider_label.as_deref() == Some(staged_label.as_str()),
+        };
     let configuring = has_staged && !staged_is_saved_primary;
 
     let mut items: Vec<MenuItem> = Vec::new();
@@ -3684,24 +3700,29 @@ fn onboarding_make_default_row(state: &OnboardingWizardState) -> MenuItem {
     .with_description(t!("onboarding.make_default.desc"))
 }
 
-/// The server-saved primary provider for the wizard's effective profile, read
-/// from `profile_llm_state` (server truth via `profile/llm/list`). `None` when
-/// no state was hydrated yet or it belongs to a different profile.
+/// The server-saved LLM state for the wizard's effective profile, read from
+/// `profile_llm_state` (server truth via `profile/llm/list`). `None` when no
+/// state was hydrated yet or it belongs to a different profile.
+fn onboarding_saved_llm_state<'a>(
+    ctx: &MenuContext<'a>,
+    state: &OnboardingWizardState,
+    current_profile: Option<&str>,
+) -> Option<&'a crate::model::ProfileLlmListResult> {
+    let effective = state.effective_profile_id(current_profile);
+    ctx.app.profile_llm_state.filter(|llm| {
+        match (llm.profile_id.as_deref(), effective.as_deref()) {
+            (Some(saved), Some(wanted)) => saved == wanted,
+            _ => true,
+        }
+    })
+}
+
 fn onboarding_saved_primary<'a>(
     ctx: &MenuContext<'a>,
     state: &OnboardingWizardState,
     current_profile: Option<&str>,
 ) -> Option<&'a LlmConfiguredProvider> {
-    let effective = state.effective_profile_id(current_profile);
-    ctx.app
-        .profile_llm_state
-        .filter(
-            |llm| match (llm.profile_id.as_deref(), effective.as_deref()) {
-                (Some(saved), Some(wanted)) => saved == wanted,
-                _ => true,
-            },
-        )
-        .and_then(|llm| llm.primary_provider())
+    onboarding_saved_llm_state(ctx, state, current_profile).and_then(|llm| llm.primary_provider())
 }
 
 fn non_empty(value: &str) -> Option<&str> {
