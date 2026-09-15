@@ -769,13 +769,23 @@ fn status_menu(ctx: &MenuContext<'_>) -> MenuSpec {
             t!("menu.status.item.snapshot.label"),
             MenuAction::Noop,
         )
-        .with_description(ctx.app.status.unwrap_or("no status supplied")),
+        .with_description(
+            ctx.app
+                .status
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| t!("menu.common.no_status_supplied").into_owned()),
+        ),
         MenuItem::new(
             "status.connection",
             t!("menu.status.item.connection.label"),
             MenuAction::Noop,
         )
-        .with_description(ctx.app.target.unwrap_or("local/offline")),
+        .with_description(
+            ctx.app
+                .target
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| t!("menu.common.local_offline").into_owned()),
+        ),
     ];
 
     items.extend(status_runtime_items(ctx));
@@ -793,7 +803,10 @@ fn status_menu(ctx: &MenuContext<'_>) -> MenuSpec {
                         SessionStatusReadParams { session_id },
                     )),
                 )
-                .with_description("Uses session/status/read."),
+                .with_description(t!(
+                    "menu.protocol.uses_method",
+                    method = AppUiActionKind::SessionStatusRead.method()
+                )),
             );
         } else {
             items.push(
@@ -802,9 +815,9 @@ fn status_menu(ctx: &MenuContext<'_>) -> MenuSpec {
                     t!("menu.status.item.refresh.label"),
                     MenuAction::Noop,
                 )
-                .disabled(format!(
-                    "Octos UI method `{}` is not advertised",
-                    AppUiActionKind::SessionStatusRead.method()
+                .disabled(t!(
+                    "menu.protocol.method_not_advertised",
+                    method = AppUiActionKind::SessionStatusRead.method()
                 )),
             );
         }
@@ -815,7 +828,7 @@ fn status_menu(ctx: &MenuContext<'_>) -> MenuSpec {
                 t!("menu.status.item.refresh.label"),
                 MenuAction::Noop,
             )
-            .disabled("server status requires an open Octos UI session"),
+            .disabled(t!("menu.status.requires_open_session")),
         );
     }
 
@@ -870,7 +883,10 @@ fn cost_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                 session_id,
             })),
         )
-        .with_description("Uses session/status/read."),
+        .with_description(t!(
+            "menu.protocol.uses_method",
+            method = AppUiActionKind::SessionStatusRead.method()
+        )),
     ];
 
     if let Some(status) = ctx.app.runtime_status {
@@ -905,7 +921,11 @@ fn cost_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                     t!("menu.cost.item.empty.label"),
                     MenuAction::Noop,
                 )
-                .disabled("session/status/read returned no usage totals yet"),
+                .disabled(t!(
+                    "menu.protocol.returned_no_items",
+                    method = AppUiActionKind::SessionStatusRead.method(),
+                    items = t!("menu.cost.usage_totals")
+                )),
             );
         }
     } else {
@@ -915,7 +935,10 @@ fn cost_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                 t!("menu.cost.item.cached.label"),
                 MenuAction::Noop,
             )
-            .disabled("session/status/read is advertised but no result is cached yet"),
+            .disabled(t!(
+                "menu.protocol.no_cached_result",
+                method = AppUiActionKind::SessionStatusRead.method()
+            )),
         );
     }
 
@@ -1516,16 +1539,16 @@ fn resume_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
         if ctx.app.resume_list_loaded {
             return MenuBuildResult::Unavailable(MenuStatusSpec {
                 id: MenuId::from(MENU_RESUME),
-                title: "Resume a session".into(),
-                message: "No prior sessions to resume".into(),
-                footer_hint: Some("Esc to close".into()),
+                title: t!("menu.resume.title").into_owned(),
+                message: t!("menu.resume.empty").into_owned(),
+                footer_hint: Some(t!("menu.footer.esc_close").into_owned()),
             });
         }
         return MenuBuildResult::Loading(MenuStatusSpec {
             id: MenuId::from(MENU_RESUME),
-            title: "Resume a session".into(),
-            message: "Loading sessions…".into(),
-            footer_hint: Some("Esc to close".into()),
+            title: t!("menu.resume.title").into_owned(),
+            message: t!("menu.resume.loading").into_owned(),
+            footer_hint: Some(t!("menu.footer.esc_close").into_owned()),
         });
     }
 
@@ -1547,18 +1570,19 @@ fn resume_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                         .as_deref()
                         .filter(|title| !title.trim().is_empty())
                 })
-                .unwrap_or("(no preview)");
-            let label = format!("{short_id}  {}", truncate_display_width(prompt, 60));
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| t!("menu.resume.no_preview").into_owned());
+            let label = format!("{short_id}  {}", truncate_display_width(&prompt, 60));
             // Description: relative datetime (when the server sent one) + count.
             let description = match row.updated_at.as_deref() {
                 Some(updated) if !updated.is_empty() => {
                     format!(
-                        "{} · {} msgs",
+                        "{} · {}",
                         crate::store::relative_time(updated),
-                        row.message_count
+                        t!("menu.resume.message_count", count = row.message_count)
                     )
                 }
-                _ => format!("{} msgs", row.message_count),
+                _ => t!("menu.resume.message_count", count = row.message_count).into_owned(),
             };
             MenuItem::new(
                 row.id.clone(),
@@ -1571,13 +1595,13 @@ fn resume_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
 
     MenuBuildResult::Ready(MenuSpec {
         id: MenuId::from(MENU_RESUME),
-        title: "Resume a session".into(),
-        subtitle: Some("Switch to a prior session and reload its transcript.".into()),
+        title: t!("menu.resume.title").into_owned(),
+        subtitle: Some(t!("menu.resume.subtitle").into_owned()),
         items,
         tabs: Vec::new(),
         searchable: true,
-        search_placeholder: Some("Search sessions…".into()),
-        footer_hint: Some("Enter resume · /resume <id> · Esc".into()),
+        search_placeholder: Some(t!("menu.resume.search").into_owned()),
+        footer_hint: Some(t!("menu.resume.footer").into_owned()),
         preview: None,
         mode: MenuMode::SingleSelect,
     })
@@ -1632,15 +1656,15 @@ fn truncate_display_width(text: &str, max_cols: usize) -> String {
 /// into `rewind_turns` when the picker opens. Empty → `Unavailable` (nothing to
 /// rewind to); otherwise one selectable row per user turn (newest-first), and
 /// picking a row drops the later turns via `session/rollback` and puts that
-/// message back in the composer to edit and resend. Strings are plain English
-/// (no new i18n keys), mirroring `/resume`.
+/// message back in the composer to edit and resend. All visible strings use
+/// the same locale catalogue as the rest of the menu system.
 fn rewind_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
     if ctx.app.rewind_turns.is_empty() {
         return MenuBuildResult::Unavailable(MenuStatusSpec {
             id: MenuId::from(MENU_REWIND),
-            title: "Rewind the conversation".into(),
-            message: "Nothing to rewind to in this session".into(),
-            footer_hint: Some("Esc to close".into()),
+            title: t!("menu.rewind.title").into_owned(),
+            message: t!("menu.rewind.empty").into_owned(),
+            footer_hint: Some(t!("menu.footer.esc_close").into_owned()),
         });
     }
 
@@ -1663,12 +1687,12 @@ fn rewind_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
             let description = match row.timestamp.as_deref() {
                 Some(timestamp) if !timestamp.is_empty() => {
                     format!(
-                        "{} · drops {} turn(s)",
+                        "{} · {}",
                         crate::store::relative_time(timestamp),
-                        row.num_turns
+                        t!("menu.rewind.drop_count", count = row.num_turns)
                     )
                 }
-                _ => format!("drops {} turn(s)", row.num_turns),
+                _ => t!("menu.rewind.drop_count", count = row.num_turns).into_owned(),
             };
             MenuItem::new(
                 format!("rewind:{}", row.num_turns),
@@ -1685,13 +1709,13 @@ fn rewind_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
 
     MenuBuildResult::Ready(MenuSpec {
         id: MenuId::from(MENU_REWIND),
-        title: "Rewind the conversation".into(),
-        subtitle: Some("Go back to an earlier message to edit and resend it.".into()),
+        title: t!("menu.rewind.title").into_owned(),
+        subtitle: Some(t!("menu.rewind.subtitle").into_owned()),
         items,
         tabs: Vec::new(),
         searchable: true,
-        search_placeholder: Some("Search messages…".into()),
-        footer_hint: Some("Enter rewind · /rewind <n> · Esc".into()),
+        search_placeholder: Some(t!("menu.rewind.search").into_owned()),
+        footer_hint: Some(t!("menu.rewind.footer").into_owned()),
         preview: None,
         mode: MenuMode::SingleSelect,
     })
@@ -1812,14 +1836,14 @@ fn onboarding_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                 t!("menu.onboard.item.auth_refresh.label"),
                 MenuAction::send_appui(AppUiCommand::AuthStatus(AuthStatusParams::default())),
             )
-            .with_description("Uses auth/status.")
+            .with_description(t!("menu.protocol.uses_method", method = "auth/status"))
             .maybe_disabled(action_missing_reason(ctx, APPUI_METHOD_AUTH_STATUS)),
             MenuItem::new(
                 "onboard.auth.send",
                 t!("menu.onboard.item.auth_send.label"),
                 MenuAction::Local(LocalAction::Onboarding(OnboardingAction::SendCode)),
             )
-            .with_description("Uses auth/send_code with the wizard email.")
+            .with_description(t!("menu.onboard.item.auth_send.desc"))
             .maybe_disabled(onboarding_disabled_reason(
                 ctx,
                 state,
@@ -1839,7 +1863,7 @@ fn onboarding_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                     token: state.auth_token.clone(),
                 })),
             )
-            .with_description("Uses auth/me.")
+            .with_description(t!("menu.protocol.uses_method", method = "auth/me"))
             .maybe_disabled(action_missing_reason(ctx, APPUI_METHOD_AUTH_ME)),
         ]
     };
@@ -1939,7 +1963,7 @@ fn onboarding_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
             t!("menu.onboard.item.providers_refresh.label"),
             MenuAction::Local(LocalAction::Onboarding(OnboardingAction::RefreshProviders)),
         )
-        .with_description("Uses profile/llm/list.")
+        .with_description(t!("menu.protocol.uses_method", method = "profile/llm/list"))
         .maybe_disabled(action_missing_reason(ctx, APPUI_METHOD_MODEL_LIST)),
         MenuItem::new(
             "onboard.finish",
@@ -4463,7 +4487,7 @@ fn login_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
             t!("menu.login.item.auth_status.label"),
             MenuAction::send_appui(AppUiCommand::AuthStatus(AuthStatusParams::default())),
         )
-        .with_description("Uses auth/status.")
+        .with_description(t!("menu.protocol.uses_method", method = "auth/status"))
         .maybe_disabled(action_missing_reason(ctx, APPUI_METHOD_AUTH_STATUS)),
         MenuItem::new(
             "login.me",
@@ -4472,7 +4496,7 @@ fn login_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                 token: state.auth_token.clone(),
             })),
         )
-        .with_description("Uses auth/me.")
+        .with_description(t!("menu.protocol.uses_method", method = "auth/me"))
         .maybe_disabled(action_missing_reason(ctx, APPUI_METHOD_AUTH_ME)),
         MenuItem::new(
             "login.logout",
@@ -4481,7 +4505,7 @@ fn login_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                 token: state.auth_token.clone(),
             })),
         )
-        .with_description("Uses auth/logout.")
+        .with_description(t!("menu.protocol.uses_method", method = "auth/logout"))
         .maybe_disabled(action_missing_reason(ctx, APPUI_METHOD_AUTH_LOGOUT)),
     ];
 
@@ -4509,7 +4533,7 @@ fn login_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                 t!("menu.login.item.otp_send.label"),
                 MenuAction::Local(LocalAction::Onboarding(OnboardingAction::SendCode)),
             )
-            .with_description("Uses auth/send_code.")
+            .with_description(t!("menu.protocol.uses_method", method = "auth/send_code"))
             .maybe_disabled(onboarding_disabled_reason(
                 ctx,
                 state,
@@ -4534,7 +4558,7 @@ fn login_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                 t!("menu.login.item.otp_verify.label"),
                 MenuAction::Local(LocalAction::Onboarding(OnboardingAction::VerifyCode)),
             )
-            .with_description("Uses auth/verify.")
+            .with_description(t!("menu.protocol.uses_method", method = "auth/verify"))
             .maybe_disabled(onboarding_verify_disabled_reason(ctx, state)),
         );
     }
@@ -5252,7 +5276,7 @@ fn model_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
         t!("menu.model.item.refresh.label"),
         refresh_action,
     )
-    .with_description("Uses profile/llm/list.");
+    .with_description(t!("menu.protocol.uses_method", method = "profile/llm/list"));
     if !can_list {
         refresh = refresh.disabled(method_missing_reason(ctx, APPUI_METHOD_MODEL_LIST));
     }
@@ -5266,7 +5290,11 @@ fn model_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                     t!("menu.model.item.empty.label"),
                     MenuAction::Noop,
                 )
-                .disabled("profile/llm/list returned no models for this profile"),
+                .disabled(t!(
+                    "menu.protocol.returned_no_items",
+                    method = "profile/llm/list",
+                    items = t!("menu.model.profile_models")
+                )),
             );
         } else {
             // Exactly ONE row is the active model. The catalog's `selected`
@@ -5313,7 +5341,7 @@ fn model_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                     item = item.disabled(method_missing_reason(ctx, APPUI_METHOD_MODEL_SELECT));
                 }
                 if model.available == Some(false) {
-                    item = item.disabled("server reports this model is unavailable");
+                    item = item.disabled(t!("menu.model.server_unavailable"));
                 }
                 items.push(item);
             }
@@ -5473,7 +5501,7 @@ fn mcp_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                 include_disabled: true,
             })),
         )
-        .with_description("Uses mcp/config/list.")
+        .with_description(t!("menu.protocol.uses_method", method = "mcp/config/list"))
         .maybe_disabled(action_missing_reason(ctx, APPUI_METHOD_MCP_CONFIG_LIST)),
     );
 
@@ -5487,7 +5515,7 @@ fn mcp_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                     include_disabled: true,
                 })),
             )
-            .with_description("Uses mcp/status/list.")
+            .with_description(t!("menu.protocol.uses_method", method = "mcp/status/list"))
             .maybe_disabled(action_missing_reason(ctx, APPUI_METHOD_MCP_STATUS_LIST)),
         );
     }
@@ -5498,7 +5526,10 @@ fn mcp_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
             t!("menu.mcp.item.upsert.label"),
             MenuAction::Local(LocalAction::EditComposer("/mcp upsert ".into())),
         )
-        .with_description("Edit as: /mcp upsert <server> {json}")
+        .with_description(t!(
+            "menu.common.edit_as",
+            command = "/mcp upsert <server> {json}"
+        ))
         .maybe_disabled(mutating_action_missing_reason(
             ctx,
             APPUI_METHOD_MCP_CONFIG_UPSERT,
@@ -5513,7 +5544,11 @@ fn mcp_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                     t!("menu.mcp.item.empty.label"),
                     MenuAction::Noop,
                 )
-                .disabled("mcp/config/list returned no configured servers"),
+                .disabled(t!(
+                    "menu.protocol.returned_no_items",
+                    method = "mcp/config/list",
+                    items = t!("menu.mcp.configured_servers")
+                )),
             );
         } else {
             for server in &config.servers {
@@ -5545,14 +5580,14 @@ fn mcp_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                 items.push(
                     MenuItem::new(
                         format!("mcp.server.{server_name}.test"),
-                        format!("Test {server_name}"),
+                        t!("menu.common.test_named", name = server_name).into_owned(),
                         MenuAction::send_appui(AppUiCommand::TestMcpConfig(McpConfigTestParams {
                             session_id: session_id.clone(),
                             profile_id: profile_id.clone(),
                             server: server_name.clone(),
                         })),
                     )
-                    .with_description("Uses mcp/config/test.")
+                    .with_description(t!("menu.protocol.uses_method", method = "mcp/config/test"))
                     .maybe_disabled(mutating_action_missing_reason(
                         ctx,
                         APPUI_METHOD_MCP_CONFIG_TEST,
@@ -5565,7 +5600,7 @@ fn mcp_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                 items.push(
                     MenuItem::new(
                         format!("mcp.server.{server_name}.delete"),
-                        format!("Delete {server_name}"),
+                        t!("menu.common.delete_named", name = server_name).into_owned(),
                         MenuAction::send_appui(AppUiCommand::DeleteMcpConfig(
                             McpConfigDeleteParams {
                                 profile_id: profile_id.clone(),
@@ -5573,7 +5608,10 @@ fn mcp_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                             },
                         )),
                     )
-                    .with_description("Uses mcp/config/delete.")
+                    .with_description(t!(
+                        "menu.protocol.uses_method",
+                        method = "mcp/config/delete"
+                    ))
                     .with_state(delete_state)
                     .maybe_disabled(mutating_action_missing_reason(
                         ctx,
@@ -5590,7 +5628,11 @@ fn mcp_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                     t!("menu.mcp.item.empty.label"),
                     MenuAction::Noop,
                 )
-                .disabled("mcp/status/list returned no servers for this session"),
+                .disabled(t!(
+                    "menu.protocol.returned_no_items",
+                    method = "mcp/status/list",
+                    items = t!("menu.mcp.session_servers")
+                )),
             );
         } else {
             for server in &catalog.servers {
@@ -5616,7 +5658,7 @@ fn mcp_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                 t!("menu.mcp.item.cached.label"),
                 MenuAction::Noop,
             )
-            .disabled("Run Refresh MCP config first"),
+            .disabled(t!("menu.mcp.refresh_first")),
         );
     }
 
@@ -5661,7 +5703,7 @@ fn tool_settings_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                 include_disabled: true,
             })),
         )
-        .with_description("Uses tool/config/list.")
+        .with_description(t!("menu.protocol.uses_method", method = "tool/config/list"))
         .maybe_disabled(action_missing_reason(ctx, APPUI_METHOD_TOOL_CONFIG_LIST)),
     );
 
@@ -5675,7 +5717,7 @@ fn tool_settings_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                     include_denied: true,
                 })),
             )
-            .with_description("Uses tool/status/list.")
+            .with_description(t!("menu.protocol.uses_method", method = "tool/status/list"))
             .maybe_disabled(action_missing_reason(ctx, APPUI_METHOD_TOOL_STATUS_LIST)),
         );
     }
@@ -5686,7 +5728,10 @@ fn tool_settings_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
             t!("menu.tools.item.upsert.label"),
             MenuAction::Local(LocalAction::EditComposer("/tools upsert ".into())),
         )
-        .with_description("Edit as: /tools upsert <tool> {json}")
+        .with_description(t!(
+            "menu.common.edit_as",
+            command = "/tools upsert <tool> {json}"
+        ))
         .maybe_disabled(mutating_action_missing_reason(
             ctx,
             APPUI_METHOD_TOOL_CONFIG_UPSERT,
@@ -5742,7 +5787,11 @@ fn tool_settings_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                     t!("menu.tools.item.empty.label"),
                     MenuAction::Noop,
                 )
-                .disabled("tool/config/list returned no configured tools"),
+                .disabled(t!(
+                    "menu.protocol.returned_no_items",
+                    method = "tool/config/list",
+                    items = t!("menu.tools.configured_tools")
+                )),
             );
         } else {
             for tool in &config.tools {
@@ -5774,7 +5823,7 @@ fn tool_settings_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                 items.push(
                     MenuItem::new(
                         format!("tools.tool.{tool_name}.test"),
-                        format!("Test {tool_name}"),
+                        t!("menu.common.test_named", name = tool_name).into_owned(),
                         MenuAction::send_appui(AppUiCommand::TestToolConfig(
                             ToolConfigTestParams {
                                 session_id: session_id.clone(),
@@ -5783,7 +5832,7 @@ fn tool_settings_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                             },
                         )),
                     )
-                    .with_description("Uses tool/config/test.")
+                    .with_description(t!("menu.protocol.uses_method", method = "tool/config/test"))
                     .maybe_disabled(mutating_action_missing_reason(
                         ctx,
                         APPUI_METHOD_TOOL_CONFIG_TEST,
@@ -5796,7 +5845,7 @@ fn tool_settings_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                 items.push(
                     MenuItem::new(
                         format!("tools.tool.{tool_name}.delete"),
-                        format!("Delete {tool_name}"),
+                        t!("menu.common.delete_named", name = tool_name).into_owned(),
                         MenuAction::send_appui(AppUiCommand::DeleteToolConfig(
                             ToolConfigDeleteParams {
                                 profile_id: profile_id.clone(),
@@ -5804,7 +5853,10 @@ fn tool_settings_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                             },
                         )),
                     )
-                    .with_description("Uses tool/config/delete.")
+                    .with_description(t!(
+                        "menu.protocol.uses_method",
+                        method = "tool/config/delete"
+                    ))
                     .with_state(delete_state)
                     .maybe_disabled(mutating_action_missing_reason(
                         ctx,
@@ -5821,7 +5873,11 @@ fn tool_settings_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                     t!("menu.tools.item.status_empty.label"),
                     MenuAction::Noop,
                 )
-                .disabled("tool/status/list returned no tools for this session"),
+                .disabled(t!(
+                    "menu.protocol.returned_no_items",
+                    method = "tool/status/list",
+                    items = t!("menu.tools.session_tools")
+                )),
             );
         } else {
             for tool in &catalog.tools {
@@ -5848,7 +5904,7 @@ fn tool_settings_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                 t!("menu.tools.item.cached.label"),
                 MenuAction::Noop,
             )
-            .disabled("Run Refresh tool config first"),
+            .disabled(t!("menu.tools.refresh_first")),
         );
     }
 
@@ -5896,7 +5952,10 @@ fn skills_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                 profile_id: profile_id.clone(),
             })),
         )
-        .with_description("Uses profile/skills/list.")
+        .with_description(t!(
+            "menu.protocol.uses_method",
+            method = "profile/skills/list"
+        ))
         .maybe_disabled(action_missing_reason(ctx, APPUI_METHOD_PROFILE_SKILLS_LIST)),
         MenuItem::new(
             "skills.search",
@@ -5928,7 +5987,11 @@ fn skills_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                     t!("menu.skills.item.none.label"),
                     MenuAction::Noop,
                 )
-                .disabled("profile/skills/list returned no installed skills"),
+                .disabled(t!(
+                    "menu.protocol.returned_no_items",
+                    method = "profile/skills/list",
+                    items = t!("menu.skills.installed_skills")
+                )),
             );
         } else {
             for skill in &skills.skills {
@@ -5963,7 +6026,7 @@ fn skills_menu(ctx: &MenuContext<'_>) -> MenuBuildResult {
                 t!("menu.skills.item.cache_empty.label"),
                 MenuAction::Noop,
             )
-            .disabled("Run Refresh installed skills first"),
+            .disabled(t!("menu.skills.refresh_first")),
         );
     }
 
@@ -6265,7 +6328,7 @@ fn permission_profile_items(
                 PermissionProfileListParams { session_id },
             )),
         )
-        .with_description("Requires profile/list.")
+        .with_description(t!("menu.protocol.requires_method", method = "profile/list"))
         .maybe_disabled(profile_list_reason),
     ];
 
@@ -6432,7 +6495,10 @@ fn approval_scopes_refresh_item(
             session_id,
         })),
     )
-    .with_description("Uses approval/scopes/list.");
+    .with_description(t!(
+        "menu.protocol.uses_method",
+        method = "approval/scopes/list"
+    ));
 
     if ctx
         .availability
@@ -6453,7 +6519,7 @@ fn approval_scopes_clear_item(ctx: &MenuContext<'_>) -> MenuItem {
         t!("menu.permissions.item.scopes_clear.label"),
         MenuAction::Noop,
     )
-    .with_description("Requires scopes/clear.")
+    .with_description(t!("menu.protocol.requires_method", method = "scopes/clear"))
     .maybe_disabled(permission_action_disabled_reason(
         ctx,
         AppUiActionKind::ApprovalScopesClear,
@@ -7001,7 +7067,10 @@ fn status_runtime_items(ctx: &MenuContext<'_>) -> Vec<MenuItem> {
                     t!("menu.status.item.server.label"),
                     MenuAction::Noop,
                 )
-                .disabled("session/status/read is advertised but no result is cached yet"),
+                .disabled(t!(
+                    "menu.protocol.no_cached_result",
+                    method = AppUiActionKind::SessionStatusRead.method()
+                )),
             ];
         }
         return Vec::new();

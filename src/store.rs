@@ -517,9 +517,7 @@ impl Store {
         // switches back to the master to send it. Slash/bang were handled above,
         // so client-local commands (`/resume`, `!ls`, …) still work on a peer.
         if self.state.focused_session_is_peer() {
-            self.state.status =
-                "Peer sessions are read-only — steer peers from the master with peer_send_input."
-                    .into();
+            self.state.status = t!("status.peer_session_read_only").into_owned();
             return None;
         }
 
@@ -2712,11 +2710,11 @@ impl Store {
             // reorder handling exists — so mirror SaveKeymap's explicit
             // not-wired wording instead of claiming "layout selected".
             LocalAction::SaveStatusLine(_) => {
-                self.state.status = "Status line layout save is not wired yet".into();
+                self.state.status = t!("status.statusline_save_not_wired").into_owned();
                 None
             }
             LocalAction::SaveTerminalTitle(_) => {
-                self.state.status = "Terminal title layout save is not wired yet".into();
+                self.state.status = t!("status.terminal_title_save_not_wired").into_owned();
                 None
             }
             LocalAction::SaveKeymap => {
@@ -2905,17 +2903,18 @@ impl Store {
                     match self.resolve_resume_session(arg) {
                         ResumeResolution::Resolved(id) => self.resume_session_command(id),
                         ResumeResolution::Ambiguous(ids) => {
-                            self.state.status = format!(
-                                "\"{arg}\" matches {} sessions ({}); type more of the id to pick one.",
-                                ids.len(),
-                                ids.join(", ")
-                            );
+                            self.state.status = t!(
+                                "status.resume_ambiguous",
+                                query = arg,
+                                count = ids.len(),
+                                ids = ids.join(", ")
+                            )
+                            .into_owned();
                             None
                         }
                         ResumeResolution::NoMatch => {
-                            self.state.status = format!(
-                                "No prior session matches \"{arg}\"; run /resume with no argument to browse."
-                            );
+                            self.state.status =
+                                t!("status.resume_no_match", query = arg).into_owned();
                             None
                         }
                     }
@@ -2929,8 +2928,7 @@ impl Store {
                 // status line and open no menu — covers both the picker and the
                 // `/rewind <n>` inline shortcut.
                 if self.state.active_turn().is_some() {
-                    self.state.status =
-                        "Finish or stop the active turn before rewinding the conversation.".into();
+                    self.state.status = t!("status.rewind_active_turn").into_owned();
                     None
                 } else if arg.is_empty() {
                     // No fetch needed: the user turns are already in the local
@@ -3258,7 +3256,8 @@ impl Store {
         // were left queued when a terminal fired while another session was
         // active) — drain them now that it is active again.
         self.enqueue_staged_drain_after_switch();
-        self.state.status = format!("Resuming {}…", session_id.0);
+        self.state.status =
+            t!("status.resuming_session", session = session_id.0.clone()).into_owned();
         // OUTER_LOOP_REVIEW #12: an in-flight hydrate (e.g. the `session/opened`
         // dispatch) already fetches this same transcript — skip the duplicate.
         if !self.state.hydrate_in_flight.insert(session_id.clone()) {
@@ -3339,8 +3338,7 @@ impl Store {
         prefill: String,
     ) -> Option<AppUiCommand> {
         if self.state.active_turn().is_some() {
-            self.state.status =
-                "Finish or stop the active turn before rewinding the conversation.".into();
+            self.state.status = t!("status.rewind_active_turn").into_owned();
             return None;
         }
         let Some(session_id) = self
@@ -3348,11 +3346,11 @@ impl Store {
             .active_session()
             .map(|session| session.id.clone())
         else {
-            self.state.status = "No active session to rewind.".into();
+            self.state.status = t!("status.rewind_no_active_session").into_owned();
             return None;
         };
         if session_id.0 != picked_session_id {
-            self.state.status = "Rewind pick belongs to another session — reopen /rewind.".into();
+            self.state.status = t!("status.rewind_wrong_session").into_owned();
             return None;
         }
         let fresh_rows = self.collect_rewind_turns();
@@ -3360,11 +3358,11 @@ impl Store {
             .get((num_turns as usize).saturating_sub(1))
             .is_some_and(|row| row.prefill == prefill);
         if !pick_is_current {
-            self.state.status = "Transcript changed — reopen /rewind.".into();
+            self.state.status = t!("status.rewind_transcript_changed").into_owned();
             return None;
         }
         self.state.pending_rewind_prefill = Some((session_id.clone(), prefill));
-        self.state.status = format!("Rewinding {num_turns} turn(s)…");
+        self.state.status = t!("status.rewinding", count = num_turns).into_owned();
         Some(AppUiCommand::SessionRollback(SessionRollbackParams {
             session_id,
             num_turns,
@@ -3380,21 +3378,23 @@ impl Store {
     /// (the exact same path as a picker pick, so its guards apply too).
     fn rewind_inline_command(&mut self, arg: &str) -> Option<AppUiCommand> {
         let Ok(n) = arg.parse::<u32>() else {
-            self.state.status =
-                format!("/rewind expects a checkpoint number like /rewind 2 (got \"{arg}\").");
+            self.state.status = t!("status.rewind_invalid_checkpoint", value = arg).into_owned();
             return None;
         };
         if n == 0 {
-            self.state.status = "/rewind needs a checkpoint of 1 or more.".into();
+            self.state.status = t!("status.rewind_checkpoint_min").into_owned();
             return None;
         }
         // Validate against the CURRENT transcript, not a stale snapshot.
         let rows = self.collect_rewind_turns();
         let turn_count = rows.len();
         let Some(row) = rows.get((n as usize) - 1) else {
-            self.state.status = format!(
-                "/rewind {n} is out of range — this session has {turn_count} checkpoint(s)."
-            );
+            self.state.status = t!(
+                "status.rewind_checkpoint_out_of_range",
+                checkpoint = n,
+                count = turn_count
+            )
+            .into_owned();
             return None;
         };
         let num_turns = row.num_turns;
@@ -3404,7 +3404,7 @@ impl Store {
             .active_session()
             .map(|session| session.id.0.clone())
         else {
-            self.state.status = "No active session to rewind.".into();
+            self.state.status = t!("status.rewind_no_active_session").into_owned();
             return None;
         };
         self.rewind_to_turn_command(session_id, num_turns, prefill)
@@ -5681,7 +5681,7 @@ impl Store {
             }
         }
         if let Some(frame) = self.state.menu_stack.active() {
-            self.state.status = format!("Menu: {}", frame.id);
+            self.state.status = t!("status.menu_label", id = frame.id.to_string()).into_owned();
         }
     }
 
@@ -6064,10 +6064,24 @@ impl Store {
 
     fn run_onboarding_doctor(&mut self) {
         let report = self.onboarding_doctor_report();
+        let outcome_label = |outcome: &crate::model::OnboardingDoctorOutcome| match outcome {
+            crate::model::OnboardingDoctorOutcome::Pass { .. } => {
+                t!("status.doctor_outcome.pass").into_owned()
+            }
+            crate::model::OnboardingDoctorOutcome::Warn { .. } => {
+                t!("status.doctor_outcome.warn").into_owned()
+            }
+            crate::model::OnboardingDoctorOutcome::Fail { .. } => {
+                t!("status.doctor_outcome.fail").into_owned()
+            }
+            crate::model::OnboardingDoctorOutcome::Skipped { .. } => {
+                t!("status.doctor_outcome.skip").into_owned()
+            }
+        };
         let summary_line = report
             .checks
             .iter()
-            .map(|check| format!("{}: {}", check.id, check.outcome.label()))
+            .map(|check| format!("{}: {}", check.id, outcome_label(&check.outcome)))
             .collect::<Vec<_>>()
             .join(" · ");
         self.state.status =
@@ -6090,7 +6104,8 @@ impl Store {
                 crate::model::OnboardingDoctorOutcome::Fail { .. } => ActivityKind::Error,
             };
             self.state.push_activity(
-                ActivityItem::new(kind, check.id, check.outcome.label()).with_detail(detail),
+                ActivityItem::new(kind, check.id, outcome_label(&check.outcome))
+                    .with_detail(detail),
             );
         }
         self.refresh_active_menu_if_open();
@@ -10303,10 +10318,11 @@ impl Store {
                 rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
                 let count = rows.len();
                 self.state.resume_sessions = rows;
-                self.state.status = format!("Loaded {count} prior session(s) for /resume.");
+                self.state.status = t!("status.resume_loaded", count = count).into_owned();
             }
             Err(err) => {
-                self.state.status = format!("Could not parse the session list: {err}");
+                self.state.status =
+                    t!("status.resume_parse_failed", error = err.to_string()).into_owned();
             }
         }
     }
@@ -10378,7 +10394,7 @@ impl Store {
                     });
             }
         }
-        self.state.status = format!("Rewound {dropped} turn(s) — edit and resend");
+        self.state.status = t!("status.rewind_complete", count = dropped).into_owned();
     }
 
     /// Finalize a hydrated turn the server reports TERMINAL that is still latched
@@ -12163,7 +12179,8 @@ impl Store {
                             text: String::new(),
                         });
                     }
-                    self.state.status = format!("Turn started in {}", session.title);
+                    self.state.status =
+                        t!("status.turn_started_in", session = session.title.clone()).into_owned();
                     // The connected child just vouched for this turn: stamp
                     // the latch with the current connection epoch so a later
                     // relaunch reconcile can tell it from a dead child's.
@@ -12301,10 +12318,12 @@ impl Store {
                         );
                         self.state.status = recovery;
                     } else {
-                        self.state.status = format!("Tool failed: {}", event.tool_name);
+                        self.state.status =
+                            t!("status.tool_failed", tool = event.tool_name.clone()).into_owned();
                     }
                 } else {
-                    self.state.status = format!("Tool completed: {}", event.tool_name);
+                    self.state.status =
+                        t!("status.tool_completed", tool = event.tool_name.clone()).into_owned();
                 }
                 None
             }
@@ -12406,7 +12425,12 @@ impl Store {
                     .with_detail("protocol warning")
                     .with_session(event.session_id.clone()),
                 );
-                self.state.status = format!("Warning [{}]: {}", event.code, event.message);
+                self.state.status = t!(
+                    "status.warning_code_message",
+                    code = event.code,
+                    message = event.message
+                )
+                .into_owned();
                 None
             }
             UiNotification::ReasoningDelta(event) => {
@@ -12448,10 +12472,13 @@ impl Store {
             }
             UiNotification::SessionEventBridged(event) => self.apply_session_event_bridged(event),
             UiNotification::RouterStatus(event) => {
-                self.state.status = format!(
-                    "Router {} using {} ({})",
-                    event.mode, event.provider_name, event.session_id.0
-                );
+                self.state.status = t!(
+                    "status.router_status",
+                    mode = event.mode,
+                    provider = event.provider_name,
+                    session = event.session_id.0
+                )
+                .into_owned();
                 None
             }
             UiNotification::RouterFailover(event) => {
@@ -12463,14 +12490,15 @@ impl Store {
                         ))
                         .with_session(event.session_id.clone()),
                 );
-                self.state.status = format!("Router failover to {}", event.to_provider);
+                self.state.status =
+                    t!("status.router_failover", provider = event.to_provider).into_owned();
                 None
             }
             UiNotification::QueueState(event) => {
                 self.state.status = if event.pending_count == 0 {
-                    "Queue empty".into()
+                    t!("status.queue_empty").into_owned()
                 } else {
-                    format!("Queue pending: {}", event.pending_count)
+                    t!("status.queue_pending", count = event.pending_count).into_owned()
                 };
                 None
             }
@@ -12580,7 +12608,8 @@ impl Store {
                     Some(event.plan.clone()),
                     event.turn_id.clone(),
                 );
-                self.state.status = format!("Plan updated: {done}/{count} done");
+                self.state.status =
+                    t!("status.plan_updated", done = done, count = count).into_owned();
                 None
             }
             UiNotification::SessionGoalUpdated(event) => {
@@ -13751,7 +13780,12 @@ impl Store {
                     success,
                     duration_ms,
                 );
-                self.state.status = format!("Tool {label}: {tool_call_id}");
+                self.state.status = t!(
+                    "status.tool_lifecycle",
+                    state = label,
+                    id = tool_call_id.clone()
+                )
+                .into_owned();
                 None
             }
             PayloadV2::FileAttached {
@@ -13773,7 +13807,7 @@ impl Store {
                     item = item.with_tool_call(tool_call_id);
                 }
                 self.state.push_activity(item);
-                self.state.status = format!("File attached: {path}");
+                self.state.status = t!("status.file_attached", path = path).into_owned();
                 None
             }
             PayloadV2::TurnTerminal {
@@ -13843,7 +13877,9 @@ impl Store {
                             // keeps interrupted turns terse. V2 still carries a
                             // canonical error payload, so retain its text in the
                             // status surface after the common cleanup finishes.
-                            self.state.status = format!("Turn interrupted: {message}");
+                            self.state.status =
+                                t!("status.turn_interrupted_reason", message = message)
+                                    .into_owned();
                         }
                         command
                     }
@@ -13881,7 +13917,8 @@ impl Store {
                     item = item.with_tool_call(tool_call_id);
                 }
                 self.state.push_activity(item);
-                self.state.status = format!("Background completion persisted: {message_id}");
+                self.state.status =
+                    t!("status.background_completion_persisted", id = message_id).into_owned();
                 None
             }
         }
@@ -13906,7 +13943,11 @@ impl Store {
                 .with_detail(event.source)
                 .with_session(session_id),
         );
-        self.state.status = format!("Background completion persisted: {}", event.message_id);
+        self.state.status = t!(
+            "status.background_completion_persisted",
+            id = event.message_id
+        )
+        .into_owned();
         None
     }
 
@@ -13942,7 +13983,7 @@ impl Store {
                 .with_turn(event.turn_id)
                 .with_detail(event.mime.unwrap_or_else(|| "artifact".into())),
         );
-        self.state.status = format!("File attached: {}", event.path);
+        self.state.status = t!("status.file_attached", path = event.path).into_owned();
         None
     }
 
@@ -13955,7 +13996,7 @@ impl Store {
                 .with_detail("legacy session event")
                 .with_session(event.session_id.clone()),
         );
-        self.state.status = format!("Session event: {}", event.kind);
+        self.state.status = t!("status.session_event", kind = event.kind).into_owned();
         None
     }
 
@@ -14000,7 +14041,7 @@ impl Store {
         if let Some(session_id) = cleared.as_ref() {
             self.resume_run_state_after_decision(session_id);
         }
-        self.state.status = format!("Approval auto-resolved ({decision}) by scope policy");
+        self.state.status = t!("status.approval_auto_resolved", decision = decision).into_owned();
         None
     }
 
@@ -14020,7 +14061,12 @@ impl Store {
         if let Some(session_id) = cleared.as_ref() {
             self.resume_run_state_after_decision(session_id);
         }
-        self.state.status = format!("Approval decided: {decision} ({detail})");
+        self.state.status = t!(
+            "status.approval_decided",
+            decision = decision,
+            detail = detail
+        )
+        .into_owned();
         None
     }
 
@@ -14034,7 +14080,7 @@ impl Store {
         if let Some(session_id) = cleared.as_ref() {
             self.resume_run_state_after_decision(session_id);
         }
-        self.state.status = format!("Approval cancelled: {reason}");
+        self.state.status = t!("status.approval_cancelled", reason = reason).into_owned();
         None
     }
 
@@ -14247,7 +14293,7 @@ impl Store {
         if self.state.task_output.is_for(&session_id, &task_id) {
             self.state.task_output.append_output(&text, cursor);
         }
-        self.state.status = format!("Task output @{}", cursor.offset);
+        self.state.status = t!("status.task_output_cursor", offset = cursor.offset).into_owned();
     }
 
     fn commit_live_reply(&mut self, event: TurnCompletedEvent) -> Option<AppUiCommand> {
