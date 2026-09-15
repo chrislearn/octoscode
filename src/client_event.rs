@@ -276,8 +276,16 @@ pub struct ProfileLlmListClientEvent {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProfileLlmMutationClientEvent {
+    pub kind: ProfileLlmMutationKind,
     pub result: ProfileLlmMutationResult,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProfileLlmMutationKind {
+    Upsert,
+    Delete,
+    Test,
 }
 
 /// #1768 snapshot undo list (also carries restore acknowledgements).

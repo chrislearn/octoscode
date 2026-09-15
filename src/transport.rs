@@ -53,12 +53,12 @@ use crate::{
         ClientEvent, ContextLifecycleClientEvent, LocalShellResultEvent, McpConfigListClientEvent,
         McpConfigMutationClientEvent, McpStatusClientEvent, ModelListClientEvent,
         ModelSelectClientEvent, PermissionProfileClientEvent, ProfileLlmCatalogClientEvent,
-        ProfileLlmListClientEvent, ProfileLlmMutationClientEvent, ProfileLocalCreateClientEvent,
-        ProfileSkillsListClientEvent, ProfileSkillsMutationClientEvent,
-        ProfileSkillsRegistrySearchClientEvent, SessionBtwClientEvent,
-        SessionHydrateContextClientEvent, SessionStatusClientEvent, SubProvidersListClientEvent,
-        SubProvidersMutationClientEvent, ToolConfigListClientEvent, ToolConfigMutationClientEvent,
-        ToolStatusClientEvent,
+        ProfileLlmListClientEvent, ProfileLlmMutationClientEvent, ProfileLlmMutationKind,
+        ProfileLocalCreateClientEvent, ProfileSkillsListClientEvent,
+        ProfileSkillsMutationClientEvent, ProfileSkillsRegistrySearchClientEvent,
+        SessionBtwClientEvent, SessionHydrateContextClientEvent, SessionStatusClientEvent,
+        SubProvidersListClientEvent, SubProvidersMutationClientEvent, ToolConfigListClientEvent,
+        ToolConfigMutationClientEvent, ToolStatusClientEvent,
     },
     model::{
         AppUiAuthToken, AppUiCommand, AuthLogoutResult, AuthMeResult, AuthSendCodeResult,
@@ -3962,11 +3962,11 @@ fn success_response_to_app_event(
                 )),
             }
         }
-        crate::model::APPUI_METHOD_PROFILE_LLM_UPSERT
+        method @ (crate::model::APPUI_METHOD_PROFILE_LLM_UPSERT
         | crate::model::APPUI_METHOD_PROFILE_LLM_DELETE
-        | crate::model::APPUI_METHOD_PROFILE_LLM_TEST => {
+        | crate::model::APPUI_METHOD_PROFILE_LLM_TEST) => {
             match serde_json::from_value::<ProfileLlmMutationResult>(result) {
-                Ok(result) => Ok(Some(profile_llm_mutation_event(result))),
+                Ok(result) => Ok(Some(profile_llm_mutation_event(method, result))),
                 Err(err) => Ok(Some(
                     app_error(
                         "invalid_result",
@@ -4612,7 +4612,13 @@ fn profile_llm_list_event(result: ProfileLlmListResult) -> ClientEvent {
     })
 }
 
-fn profile_llm_mutation_event(result: ProfileLlmMutationResult) -> ClientEvent {
+fn profile_llm_mutation_event(method: &str, result: ProfileLlmMutationResult) -> ClientEvent {
+    let kind = match method {
+        crate::model::APPUI_METHOD_PROFILE_LLM_UPSERT => ProfileLlmMutationKind::Upsert,
+        crate::model::APPUI_METHOD_PROFILE_LLM_DELETE => ProfileLlmMutationKind::Delete,
+        crate::model::APPUI_METHOD_PROFILE_LLM_TEST => ProfileLlmMutationKind::Test,
+        _ => unreachable!("not a profile/llm mutation method: {method}"),
+    };
     let count = result.models().len();
     let message = match (
         result.applied,
@@ -4624,7 +4630,11 @@ fn profile_llm_mutation_event(result: ProfileLlmMutationResult) -> ClientEvent {
         (false, None, Some(error)) => format!("Provider operation failed: {error}"),
         _ => format!("Provider profile updated: {count} configured provider(s)"),
     };
-    ClientEvent::ProfileLlmMutation(ProfileLlmMutationClientEvent { message, result })
+    ClientEvent::ProfileLlmMutation(ProfileLlmMutationClientEvent {
+        kind,
+        message,
+        result,
+    })
 }
 
 fn snapshot_list_event(result: crate::model::SnapshotListResult) -> ClientEvent {
@@ -5734,11 +5744,22 @@ impl AppUiBackend for MockAppUiBackend {
                 ));
                 Ok(())
             }
-            AppUiCommand::ProfileLlmUpsert(_)
+            command @ (AppUiCommand::ProfileLlmUpsert(_)
             | AppUiCommand::ProfileLlmDelete(_)
-            | AppUiCommand::ProfileLlmTest(_) => {
-                self.queue
-                    .push_back(profile_llm_mutation_event(ProfileLlmMutationResult {
+            | AppUiCommand::ProfileLlmTest(_)) => {
+                let method = match command {
+                    AppUiCommand::ProfileLlmUpsert(_) => {
+                        crate::model::APPUI_METHOD_PROFILE_LLM_UPSERT
+                    }
+                    AppUiCommand::ProfileLlmDelete(_) => {
+                        crate::model::APPUI_METHOD_PROFILE_LLM_DELETE
+                    }
+                    AppUiCommand::ProfileLlmTest(_) => crate::model::APPUI_METHOD_PROFILE_LLM_TEST,
+                    _ => unreachable!(),
+                };
+                self.queue.push_back(profile_llm_mutation_event(
+                    method,
+                    ProfileLlmMutationResult {
                         profile_id: Some(self.profile_id()),
                         primary: mock_profile_llm_list().primary,
                         fallbacks: mock_profile_llm_list().fallbacks,
@@ -5747,7 +5768,8 @@ impl AppUiBackend for MockAppUiBackend {
                         runtime_policy_stamp: None,
                         message: None,
                         error: None,
-                    }));
+                    },
+                ));
                 Ok(())
             }
             AppUiCommand::AuthStatus(_) => {
@@ -10567,6 +10589,40 @@ mod tests {
                 .map(|endpoint| endpoint.label().to_string()),
             Some("octos serve --stdio".into())
         );
+    }
+
+    #[test]
+    fn protocol_preserves_profile_llm_delete_kind() {
+        let mut exchange = ProtocolExchange::default();
+        let request = exchange
+            .build_tracked_request(AppUiCommand::ProfileLlmDelete(
+                crate::model::ProfileLlmDeleteParams {
+                    profile_id: Some("coding".into()),
+                    family_id: "moonshot-coding".into(),
+                    model_id: "k3".into(),
+                    route_id: "official".into(),
+                },
+            ))
+            .expect("request builds");
+        let response = json!({
+            "jsonrpc": "2.0",
+            "id": request.id,
+            "result": {
+                "profile_id": "coding",
+                "primary": null,
+                "fallbacks": [],
+                "applied": true
+            }
+        });
+
+        let event = exchange
+            .decode_rpc_text(&response.to_string())
+            .expect("response decodes")
+            .expect("delete result yields an event");
+        let ClientEvent::ProfileLlmMutation(event) = event else {
+            panic!("expected profile LLM mutation event");
+        };
+        assert_eq!(event.kind, ProfileLlmMutationKind::Delete);
     }
 
     /// `profile/llm/fetch_models` responses must produce an event: this arm

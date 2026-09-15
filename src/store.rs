@@ -21,10 +21,11 @@ use crate::{
         CapabilitiesClientEvent, ClientEvent, McpConfigListClientEvent,
         McpConfigMutationClientEvent, McpStatusClientEvent, ModelListClientEvent,
         ModelSelectClientEvent, PermissionProfileClientEvent, ProfileLlmCatalogClientEvent,
-        ProfileLlmListClientEvent, ProfileLlmMutationClientEvent, ProfileSkillsListClientEvent,
-        ProfileSkillsMutationClientEvent, ProfileSkillsRegistrySearchClientEvent,
-        SessionStatusClientEvent, SubProvidersListClientEvent, SubProvidersMutationClientEvent,
-        ToolConfigListClientEvent, ToolConfigMutationClientEvent, ToolStatusClientEvent,
+        ProfileLlmListClientEvent, ProfileLlmMutationClientEvent, ProfileLlmMutationKind,
+        ProfileSkillsListClientEvent, ProfileSkillsMutationClientEvent,
+        ProfileSkillsRegistrySearchClientEvent, SessionStatusClientEvent,
+        SubProvidersListClientEvent, SubProvidersMutationClientEvent, ToolConfigListClientEvent,
+        ToolConfigMutationClientEvent, ToolStatusClientEvent,
     },
     menu::{
         CommandEntry, CommandRegistry, CommandResolution, LocalAction, MenuAction, MenuAppSnapshot,
@@ -11349,52 +11350,85 @@ impl Store {
     }
 
     fn apply_profile_llm_mutation_event(&mut self, event: ProfileLlmMutationClientEvent) {
-        let pending = self.state.onboarding.provider_pending.take();
-        let save_target = self.state.onboarding.provider_save_target.take();
+        let is_model_removal = event.kind == ProfileLlmMutationKind::Delete;
+        // Delete is an independent operation: do not consume a staged Test/Save
+        // if responses ever cross. Its explicit transport-level kind also means
+        // cancellation leftovers cannot make a later upsert look like a delete.
+        let pending = (!is_model_removal)
+            .then(|| self.state.onboarding.provider_pending.take())
+            .flatten();
+        let save_target = (!is_model_removal)
+            .then(|| self.state.onboarding.provider_save_target.take())
+            .flatten();
+        if is_model_removal {
+            self.state.onboarding.pending_model_removal = None;
+        }
         let staged_provider_label = self.state.onboarding.provider_label();
         let mut reset_staged_provider = false;
         if event.result.applied {
-            if profile_llm_list_has_provider_state(&event.result.to_list_result()) {
-                self.state.profile_llm_state = Some(event.result.to_list_result());
+            let list_result = event.result.to_list_result();
+            let primary_remains = list_result.primary_provider().is_some();
+            // Test responses may omit the provider list, so the ordinary path
+            // preserves the prior cache when the echo is empty. Delete results
+            // are authoritative even when the last model was removed and the
+            // returned list is empty.
+            if is_model_removal || profile_llm_list_has_provider_state(&list_result) {
+                self.state.profile_llm_state = Some(list_result);
             }
-            match pending {
-                Some(OnboardingProviderPending::Test) => {
-                    self.state.onboarding.provider_tested = true;
-                    // M22-E: a successful test clears any prior
-                    // failure reason so the menu does not surface
-                    // a stale "test failed" recovery line.
-                    self.state.onboarding.provider_test_failure_reason = None;
+            if is_model_removal {
+                // Server truth now owns whether a primary still exists. Drop
+                // local "last saved" hints when the primary was removed so
+                // re-adding its family/model/route is treated as a fresh draft.
+                // When a primary remains (for example after deleting a
+                // fallback), its server record remains authoritative.
+                self.state.onboarding.provider_saved = primary_remains;
+                self.state.onboarding.provider_tested = false;
+                if !primary_remains {
+                    self.state.onboarding.saved_primary_provider_label = None;
+                    self.state.onboarding.last_saved_provider_label = None;
+                    self.state.onboarding.last_saved_provider_target = None;
                 }
-                Some(OnboardingProviderPending::Save) => {
-                    match save_target.unwrap_or(OnboardingProviderSaveTarget::Primary) {
-                        OnboardingProviderSaveTarget::Primary => {
-                            self.state.onboarding.provider_saved = true;
-                            self.state.onboarding.provider_tested = true;
-                            self.state.onboarding.saved_primary_provider_label =
-                                Some(staged_provider_label.clone());
-                        }
-                        OnboardingProviderSaveTarget::Fallback
-                        | OnboardingProviderSaveTarget::ResearchLane => {
-                            self.state.onboarding.provider_tested = false;
-                            reset_staged_provider = true;
-                        }
+                self.state.onboarding.provider_test_failure_reason = None;
+            } else {
+                match pending {
+                    Some(OnboardingProviderPending::Test) => {
+                        self.state.onboarding.provider_tested = true;
+                        // M22-E: a successful test clears any prior
+                        // failure reason so the menu does not surface
+                        // a stale "test failed" recovery line.
+                        self.state.onboarding.provider_test_failure_reason = None;
                     }
-                    self.state.onboarding.last_saved_provider_label =
-                        Some(staged_provider_label.clone());
-                    self.state.onboarding.last_saved_provider_target =
-                        Some(save_target.unwrap_or(OnboardingProviderSaveTarget::Primary));
-                    self.state.onboarding.provider_test_failure_reason = None;
-                }
-                None => {
-                    self.state.onboarding.provider_saved = true;
-                    self.state.onboarding.provider_tested = true;
-                    self.state.onboarding.saved_primary_provider_label =
-                        Some(staged_provider_label.clone());
-                    self.state.onboarding.last_saved_provider_label =
-                        Some(staged_provider_label.clone());
-                    self.state.onboarding.last_saved_provider_target =
-                        Some(OnboardingProviderSaveTarget::Primary);
-                    self.state.onboarding.provider_test_failure_reason = None;
+                    Some(OnboardingProviderPending::Save) => {
+                        match save_target.unwrap_or(OnboardingProviderSaveTarget::Primary) {
+                            OnboardingProviderSaveTarget::Primary => {
+                                self.state.onboarding.provider_saved = true;
+                                self.state.onboarding.provider_tested = true;
+                                self.state.onboarding.saved_primary_provider_label =
+                                    Some(staged_provider_label.clone());
+                            }
+                            OnboardingProviderSaveTarget::Fallback
+                            | OnboardingProviderSaveTarget::ResearchLane => {
+                                self.state.onboarding.provider_tested = false;
+                                reset_staged_provider = true;
+                            }
+                        }
+                        self.state.onboarding.last_saved_provider_label =
+                            Some(staged_provider_label.clone());
+                        self.state.onboarding.last_saved_provider_target =
+                            Some(save_target.unwrap_or(OnboardingProviderSaveTarget::Primary));
+                        self.state.onboarding.provider_test_failure_reason = None;
+                    }
+                    None => {
+                        self.state.onboarding.provider_saved = true;
+                        self.state.onboarding.provider_tested = true;
+                        self.state.onboarding.saved_primary_provider_label =
+                            Some(staged_provider_label.clone());
+                        self.state.onboarding.last_saved_provider_label =
+                            Some(staged_provider_label.clone());
+                        self.state.onboarding.last_saved_provider_target =
+                            Some(OnboardingProviderSaveTarget::Primary);
+                        self.state.onboarding.provider_test_failure_reason = None;
+                    }
                 }
             }
             if reset_staged_provider {
@@ -25142,6 +25176,7 @@ now analyzing the bus module"
 
         store.apply_client_event(ClientEvent::ProfileLlmMutation(
             ProfileLlmMutationClientEvent {
+                kind: ProfileLlmMutationKind::Test,
                 result: applied_profile_llm_result(),
                 message: "Provider connection verified".into(),
             },
@@ -25174,6 +25209,7 @@ now analyzing the bus module"
 
         store.apply_client_event(ClientEvent::ProfileLlmMutation(
             ProfileLlmMutationClientEvent {
+                kind: ProfileLlmMutationKind::Test,
                 result: failed_profile_llm_result("Provider connection failed", "invalid API key"),
                 message: "Provider connection failed: invalid API key".into(),
             },
@@ -25212,6 +25248,7 @@ now analyzing the bus module"
 
         store.apply_client_event(ClientEvent::ProfileLlmMutation(
             ProfileLlmMutationClientEvent {
+                kind: ProfileLlmMutationKind::Upsert,
                 result: applied_profile_llm_result(),
                 message: "Provider profile updated".into(),
             },
@@ -25243,6 +25280,7 @@ now analyzing the bus module"
         );
         store.apply_client_event(ClientEvent::ProfileLlmMutation(
             ProfileLlmMutationClientEvent {
+                kind: ProfileLlmMutationKind::Upsert,
                 result: applied_profile_llm_result(),
                 message: "Primary provider saved".into(),
             },
@@ -25275,6 +25313,7 @@ now analyzing the bus module"
 
         store.apply_client_event(ClientEvent::ProfileLlmMutation(
             ProfileLlmMutationClientEvent {
+                kind: ProfileLlmMutationKind::Upsert,
                 result: applied_profile_llm_result(),
                 message: "Fallback provider saved".into(),
             },
@@ -27638,6 +27677,257 @@ now analyzing the bus module"
         assert_eq!(store.state.onboarding.provider.family_id, "deepseek");
     }
 
+    /// A successful `profile/llm/delete` is not a provider save. The generic
+    /// mutation reducer used to treat it as the legacy "save with no pending
+    /// marker" case, retaining `saved_primary_provider_label`. Re-adding the
+    /// same family/model/route was then mistaken for an already-saved primary,
+    /// so model-config collapsed straight back to "Add a model" forever.
+    #[test]
+    fn deleting_primary_then_readding_same_model_expands_model_config() {
+        let mut store = protocol_store_with_methods(&[
+            crate::model::APPUI_METHOD_PROFILE_LLM_CATALOG,
+            crate::model::APPUI_METHOD_PROFILE_LLM_DELETE,
+        ]);
+        let selection = sample_selection("moonshot-coding", "k3");
+        let saved_label = "moonshot-coding / k3 via official";
+        store.state.onboarding.profile_id = Some("coding".into());
+        store.state.onboarding.provider = selection.clone();
+        store.state.onboarding.provider_saved = true;
+        store.state.onboarding.saved_primary_provider_label = Some(saved_label.into());
+        store.state.profile_llm_state = Some(crate::model::ProfileLlmListResult {
+            profile_id: Some("coding".into()),
+            primary: Some(crate::model::LlmConfiguredProvider {
+                provider: "moonshot-coding".into(),
+                model: "k3".into(),
+                family_id: Some("moonshot-coding".into()),
+                model_id: Some("k3".into()),
+                route_id: Some("official".into()),
+                has_api_key: true,
+                selected: true,
+                route: None,
+                base_url: None,
+                api_key_env: Some("KIMI_API_KEY".into()),
+                available: Some(true),
+                model_hints: None,
+                cost_per_m: None,
+                strong: None,
+            }),
+            fallbacks: Vec::new(),
+            llm: None,
+            runtime_policy_stamp: None,
+        });
+        store.state.onboarding.pending_model_removal = Some(crate::model::ModelRemovalRequest {
+            family_id: "moonshot-coding".into(),
+            model_id: "k3".into(),
+            route_id: "official".into(),
+            label: saved_label.into(),
+        });
+
+        store.apply_client_event(ClientEvent::ProfileLlmMutation(
+            ProfileLlmMutationClientEvent {
+                kind: ProfileLlmMutationKind::Delete,
+                result: crate::model::ProfileLlmMutationResult {
+                    profile_id: Some("coding".into()),
+                    primary: None,
+                    fallbacks: Vec::new(),
+                    applied: true,
+                    llm: None,
+                    runtime_policy_stamp: None,
+                    message: Some("Model removed".into()),
+                    error: None,
+                },
+                message: "Model removed".into(),
+            },
+        ));
+
+        assert!(store.state.onboarding.pending_model_removal.is_none());
+        assert!(!store.state.onboarding.provider_saved);
+        assert!(
+            store
+                .state
+                .onboarding
+                .saved_primary_provider_label
+                .is_none()
+        );
+        assert!(
+            store
+                .state
+                .profile_llm_state
+                .as_ref()
+                .is_some_and(|state| state.primary_provider().is_none()),
+            "an authoritative empty delete result must replace the old primary"
+        );
+
+        store.close_all_menus();
+        store.open_menu(MenuId::from(crate::menu::registry::MENU_MODEL));
+        store.open_menu(MenuId::from(crate::menu::registry::MENU_ONBOARD_FAMILY));
+        store.open_menu(MenuId::from(crate::menu::registry::MENU_ONBOARD_MODEL));
+        store.open_menu(MenuId::from(crate::menu::registry::MENU_ONBOARD_ROUTE));
+        store.dispatch_onboarding_action(
+            crate::model::OnboardingAction::SetProviderSelection(Box::new(selection)),
+            None,
+        );
+
+        assert!(store.active_menu_id_is(crate::menu::registry::MENU_MODEL_CONFIG));
+        assert_active_menu_has_row(&store, "onboard.provider.family");
+        let Some(MenuBuildResult::Ready(spec)) = store.state.active_menu.as_ref() else {
+            panic!("expected expanded model-config menu");
+        };
+        assert!(
+            !spec
+                .items
+                .iter()
+                .any(|item| item.id == "onboard.provider.add_model"),
+            "the re-added model must expose key/test/save instead of looping"
+        );
+    }
+
+    #[test]
+    fn server_primary_outweighs_stale_saved_label_when_readding_removed_model() {
+        let mut store = protocol_store_with_methods(&[
+            crate::model::APPUI_METHOD_PROFILE_LLM_CATALOG,
+            crate::model::APPUI_METHOD_PROFILE_LLM_DELETE,
+        ]);
+        let removed_selection = sample_selection("moonshot-coding", "k3");
+        store.state.onboarding.profile_id = Some("coding".into());
+        store.state.onboarding.provider = removed_selection.clone();
+        store.state.onboarding.saved_primary_provider_label =
+            Some("moonshot-coding / k3 via official".into());
+        store.state.profile_llm_state = Some(crate::model::ProfileLlmListResult {
+            profile_id: Some("coding".into()),
+            primary: Some(crate::model::LlmConfiguredProvider {
+                provider: "deepseek".into(),
+                model: "deepseek-reasoner".into(),
+                family_id: Some("deepseek".into()),
+                model_id: Some("deepseek-reasoner".into()),
+                route_id: Some("official".into()),
+                has_api_key: true,
+                selected: true,
+                route: None,
+                base_url: None,
+                api_key_env: Some("DEEPSEEK_API_KEY".into()),
+                available: Some(true),
+                model_hints: None,
+                cost_per_m: None,
+                strong: None,
+            }),
+            fallbacks: Vec::new(),
+            llm: None,
+            runtime_policy_stamp: None,
+        });
+
+        store.close_all_menus();
+        store.open_menu(MenuId::from(crate::menu::registry::MENU_MODEL));
+        store.open_menu(MenuId::from(crate::menu::registry::MENU_ONBOARD_FAMILY));
+        store.open_menu(MenuId::from(crate::menu::registry::MENU_ONBOARD_MODEL));
+        store.open_menu(MenuId::from(crate::menu::registry::MENU_ONBOARD_ROUTE));
+        store.dispatch_onboarding_action(
+            crate::model::OnboardingAction::SetProviderSelection(Box::new(removed_selection)),
+            None,
+        );
+
+        assert!(store.active_menu_id_is(crate::menu::registry::MENU_MODEL_CONFIG));
+        assert_active_menu_has_row(&store, "onboard.provider.family");
+    }
+
+    #[test]
+    fn deleting_fallback_preserves_remaining_primary_state() {
+        let mut store =
+            protocol_store_with_methods(&[crate::model::APPUI_METHOD_PROFILE_LLM_DELETE]);
+        store.state.onboarding.provider_saved = true;
+        store.state.onboarding.saved_primary_provider_label =
+            Some("deepseek / deepseek-reasoner via official".into());
+        store.state.onboarding.pending_model_removal = Some(crate::model::ModelRemovalRequest {
+            family_id: "moonshot-coding".into(),
+            model_id: "k3".into(),
+            route_id: "official".into(),
+            label: "moonshot-coding / k3".into(),
+        });
+        let remaining_primary = crate::model::LlmConfiguredProvider {
+            provider: "deepseek".into(),
+            model: "deepseek-reasoner".into(),
+            family_id: Some("deepseek".into()),
+            model_id: Some("deepseek-reasoner".into()),
+            route_id: Some("official".into()),
+            has_api_key: true,
+            selected: true,
+            route: None,
+            base_url: None,
+            api_key_env: Some("DEEPSEEK_API_KEY".into()),
+            available: Some(true),
+            model_hints: None,
+            cost_per_m: None,
+            strong: None,
+        };
+
+        store.apply_client_event(ClientEvent::ProfileLlmMutation(
+            ProfileLlmMutationClientEvent {
+                kind: ProfileLlmMutationKind::Delete,
+                result: crate::model::ProfileLlmMutationResult {
+                    profile_id: Some("coding".into()),
+                    primary: Some(remaining_primary),
+                    fallbacks: Vec::new(),
+                    applied: true,
+                    llm: None,
+                    runtime_policy_stamp: None,
+                    message: Some("Fallback removed".into()),
+                    error: None,
+                },
+                message: "Fallback removed".into(),
+            },
+        ));
+
+        assert!(store.state.onboarding.pending_model_removal.is_none());
+        assert!(store.state.onboarding.provider_saved);
+        assert_eq!(
+            store
+                .state
+                .onboarding
+                .saved_primary_provider_label
+                .as_deref(),
+            Some("deepseek / deepseek-reasoner via official")
+        );
+        assert!(
+            store
+                .state
+                .profile_llm_state
+                .as_ref()
+                .is_some_and(|state| state.primary_provider().is_some()),
+            "deleting a fallback must keep the server-confirmed primary"
+        );
+    }
+
+    #[test]
+    fn stale_removal_marker_cannot_reclassify_upsert_response() {
+        let mut store = protocol_store_with_methods(&[
+            crate::model::APPUI_METHOD_PROFILE_LLM_DELETE,
+            crate::model::APPUI_METHOD_PROFILE_LLM_UPSERT,
+        ]);
+        store.state.onboarding.pending_model_removal = Some(crate::model::ModelRemovalRequest {
+            family_id: "moonshot-coding".into(),
+            model_id: "k3".into(),
+            route_id: "official".into(),
+            label: "moonshot-coding / k3".into(),
+        });
+        store.state.onboarding.provider_pending =
+            Some(crate::model::OnboardingProviderPending::Save);
+
+        store.apply_client_event(ClientEvent::ProfileLlmMutation(
+            ProfileLlmMutationClientEvent {
+                kind: ProfileLlmMutationKind::Upsert,
+                result: applied_profile_llm_result(),
+                message: "Provider profile updated".into(),
+            },
+        ));
+
+        assert!(store.state.onboarding.provider_pending.is_none());
+        assert!(store.state.onboarding.provider_saved);
+        assert!(
+            store.state.onboarding.pending_model_removal.is_some(),
+            "a non-delete response must not consume an unrelated delete intent"
+        );
+    }
+
     /// The mini4 wedge: `profile/llm/test` failed with an RPC error
     /// (`auth_scope_violation`) but nothing cleared `provider_pending`, so the
     /// staged surface froze on "Testing connection…" and blocked every retry
@@ -28166,6 +28456,7 @@ now analyzing the bus module"
 
         store.apply_client_event(ClientEvent::ProfileLlmMutation(
             ProfileLlmMutationClientEvent {
+                kind: ProfileLlmMutationKind::Test,
                 result: crate::model::ProfileLlmMutationResult {
                     profile_id: Some("alice".into()),
                     primary: None,
@@ -28215,6 +28506,7 @@ now analyzing the bus module"
 
         store.apply_client_event(ClientEvent::ProfileLlmMutation(
             ProfileLlmMutationClientEvent {
+                kind: ProfileLlmMutationKind::Upsert,
                 result: applied_profile_llm_result(),
                 message: "profile/llm/upsert saved".into(),
             },
@@ -28265,6 +28557,7 @@ now analyzing the bus module"
     fn provider_failure_reason_strips_echoed_api_key() {
         let staged = crate::model::SecretString::new("sk-leaked-12345");
         let event = ProfileLlmMutationClientEvent {
+            kind: ProfileLlmMutationKind::Test,
             result: crate::model::ProfileLlmMutationResult {
                 profile_id: Some("alice".into()),
                 primary: None,
