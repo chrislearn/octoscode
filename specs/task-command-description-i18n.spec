@@ -27,6 +27,7 @@ estimate: 0.1d
 - src/menu/providers.rs
 - src/app/render.rs
 - src/app/activity_nav.rs
+- src/app/tests.rs
 - src/event_loop.rs
 - src/model.rs
 - src/store.rs
@@ -57,3 +58,10 @@ estimate: 0.1d
   假设 命令菜单、恢复/回退菜单、活动面板和运行时状态提示的翻译键集合
   当 分别以 en 与 zh 解析每个键
   那么 两种语言均解析出非空且不同的文案
+
+场景: 本地化不改写英文协议值
+  测试: activity_navigator_localizes_known_values_without_rewriting_english_protocol_values
+  假设 活动导航器收到已知操作词或服务器自定义值
+  当 在英文和中文界面分别生成显示值
+  那么 英文界面保持原始协议值
+  并且 中文界面仅翻译已知的应用标签，未知值保持原样

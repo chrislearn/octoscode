@@ -670,8 +670,8 @@ menu:
   protocol:
     uses_method: "使用 %{method}。"
     requires_method: "需要 %{method}。"
-    method_not_advertised: "服务器未公布 Octos UI 方法 `%{method}`。"
-    returned_no_items: "%{method} 未返回%{items}。"
+    method_not_advertised: "服务器未公布 Octos UI 方法 `%{method}`"
+    returned_no_items: "%{method} 未返回%{items}"
     no_cached_result: "%{method} 已公布，但尚无缓存结果"
   loop_actions:
     gone: "循环 %{id} 已不存在——被删除或已过期。"
@@ -992,7 +992,7 @@ menu:
     unavailable_title: MCP 不可用
   model:
     profile_models: 此档案的任何模型
-    server_unavailable: 服务器报告此模型不可用。
+    server_unavailable: 服务器报告此模型不可用
     footer: 回车 选择或刷新 | Esc 关闭
     item:
       add:
@@ -1144,6 +1144,7 @@ menu:
       auth_refresh:
         label: 刷新认证状态
       auth_send:
+        desc: 使用向导中的邮箱调用 auth/send_code。
         label: 发送邮箱验证码
       auth_status:
         desc: 使用 /onboard email、/onboard send-code、/onboard code、/onboard verify 完成验证。
@@ -1322,7 +1323,7 @@ menu:
     title: 技能
     unavailable_title: 技能不可用
   status:
-    requires_open_session: 服务器状态需要已打开的 Octos UI 会话。
+    requires_open_session: 服务器状态需要已打开的 Octos UI 会话
     item:
       capabilities:
         label: 能力

@@ -1218,8 +1218,8 @@ menu:
   protocol:
     uses_method: "Uses %{method}."
     requires_method: "Requires %{method}."
-    method_not_advertised: "Octos UI method `%{method}` is not advertised."
-    returned_no_items: "%{method} returned no %{items}."
+    method_not_advertised: "Octos UI method `%{method}` is not advertised"
+    returned_no_items: "%{method} returned no %{items}"
     no_cached_result: "%{method} is advertised but no result is cached yet"
   file_picker:
     title: "Insert file path"
@@ -1540,7 +1540,7 @@ menu:
     unavailable_title: MCP unavailable
   model:
     profile_models: models for this profile
-    server_unavailable: The server reports this model is unavailable.
+    server_unavailable: server reports this model is unavailable
     footer: Enter select or refresh | Esc close
     item:
       add:
@@ -1692,6 +1692,7 @@ menu:
       auth_refresh:
         label: Refresh auth status
       auth_send:
+        desc: Uses auth/send_code with the wizard email.
         label: Send email OTP
       auth_status:
         desc: Use /onboard email <address>, /onboard send-code, /onboard code <otp>, then /onboard verify.
@@ -1870,7 +1871,7 @@ menu:
     title: Skills
     unavailable_title: Skills unavailable
   status:
-    requires_open_session: Server status requires an open Octos UI session.
+    requires_open_session: server status requires an open Octos UI session
     item:
       capabilities:
         label: Capabilities

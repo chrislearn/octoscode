@@ -61,6 +61,17 @@ fn activity_navigator_activity_kind_label(kind: ActivityKind) -> String {
 }
 
 fn activity_navigator_value_label(value: &str) -> String {
+    let locale = rust_i18n::locale();
+    activity_navigator_value_label_for_locale(value, locale.as_ref())
+}
+
+pub(super) fn activity_navigator_value_label_for_locale(value: &str, locale: &str) -> String {
+    // English is also the protocol/source language. Preserve its exact value
+    // so localization never canonicalizes user-visible wire data (for example
+    // changing the existing `modify` operation to `modified`).
+    if !locale.starts_with("zh") {
+        return value.to_string();
+    }
     let key = match value.to_ascii_lowercase().as_str() {
         "active" => "app.activity_navigator.value.active",
         "pending" => "app.activity_navigator.value.pending",
@@ -80,7 +91,7 @@ fn activity_navigator_value_label(value: &str) -> String {
         "rename" | "renamed" => "app.activity_navigator.value.renamed",
         _ => return value.to_string(),
     };
-    t!(key).into_owned()
+    t!(key, locale = "zh").into_owned()
 }
 
 fn activity_navigator_field(key: &str, value: impl std::fmt::Display) -> String {
@@ -190,9 +201,9 @@ pub(super) fn activity_navigator_all_rows(app: &AppState) -> Vec<ActivityNavigat
                     activity_navigator_field("app.activity_navigator.label.session", &session.id.0),
                     activity_navigator_field(
                         "app.activity_navigator.label.phase",
-                        activity_navigator_value_label(
-                            orchestration.phase.as_deref().unwrap_or("active"),
-                        ),
+                        orchestration.phase.clone().unwrap_or_else(|| {
+                            t!("app.activity_navigator.value.active").into_owned()
+                        }),
                     ),
                     t!(
                         "app.activity_navigator.running_agents",
@@ -475,10 +486,7 @@ pub(super) fn activity_navigator_activity_row(
             "app.activity_navigator.label.kind",
             activity_navigator_activity_kind_label(item.kind),
         ),
-        activity_navigator_field(
-            "app.activity_navigator.label.status",
-            activity_navigator_value_label(&item.status),
-        ),
+        activity_navigator_field("app.activity_navigator.label.status", &item.status),
     ];
     if let Some(turn_id) = turn_id.as_ref() {
         detail.push(activity_navigator_field(
@@ -511,11 +519,7 @@ pub(super) fn activity_navigator_activity_row(
         ActivityNavigatorRowKind::Activity,
         status,
         item.title.clone(),
-        format!(
-            "{} · {}",
-            session.title,
-            activity_navigator_value_label(&item.status)
-        ),
+        format!("{} · {}", session.title, item.status),
         detail,
         ActivityNavigatorRowLinks {
             session_id: Some(session.id.clone()),
@@ -548,10 +552,7 @@ pub(super) fn activity_navigator_file_change_row(
             activity_navigator_value_label(&mutation.operation),
         ),
         activity_navigator_field("app.activity_navigator.label.preview", &preview),
-        activity_navigator_field(
-            "app.activity_navigator.label.status",
-            activity_navigator_value_label(&item.status),
-        ),
+        activity_navigator_field("app.activity_navigator.label.status", &item.status),
     ];
     if let Some(turn_id) = turn_id.as_ref() {
         detail.push(activity_navigator_field(

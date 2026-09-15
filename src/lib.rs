@@ -196,6 +196,7 @@ mod i18n_tests {
             "menu.protocol.method_not_advertised",
             "menu.protocol.returned_no_items",
             "menu.protocol.no_cached_result",
+            "menu.onboard.item.auth_send.desc",
             "menu.resume.title",
             "menu.resume.subtitle",
             "menu.resume.empty",
