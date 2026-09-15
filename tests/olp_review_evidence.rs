@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 //! olp-review-evidence 生产入口集成测试(spec: review-freeze / review-challenge /
 //! review-cross / review-peer-validity / review-regression / JSON+human 双输出)。
 //!
