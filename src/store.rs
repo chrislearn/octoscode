@@ -27831,6 +27831,53 @@ now analyzing the bus module"
     }
 
     #[test]
+    fn synthetic_official_route_matches_server_default_primary() {
+        let mut store = protocol_store_with_methods(&[
+            crate::model::APPUI_METHOD_PROFILE_LLM_CATALOG,
+            crate::model::APPUI_METHOD_PROFILE_LLM_DELETE,
+        ]);
+        store.state.onboarding.profile_id = Some("coding".into());
+        store.state.onboarding.provider = sample_selection("moonshot-coding", "k3");
+        store.state.profile_llm_state = Some(crate::model::ProfileLlmListResult {
+            profile_id: Some("coding".into()),
+            primary: Some(crate::model::LlmConfiguredProvider {
+                provider: "moonshot-coding".into(),
+                model: "k3".into(),
+                family_id: Some("moonshot-coding".into()),
+                model_id: Some("k3".into()),
+                route_id: None,
+                has_api_key: true,
+                selected: true,
+                route: None,
+                base_url: None,
+                api_key_env: Some("KIMI_API_KEY".into()),
+                available: Some(true),
+                model_hints: None,
+                cost_per_m: None,
+                strong: None,
+            }),
+            fallbacks: Vec::new(),
+            llm: None,
+            runtime_policy_stamp: None,
+        });
+
+        store.close_all_menus();
+        store.open_menu(MenuId::from(crate::menu::registry::MENU_MODEL_CONFIG));
+
+        assert_active_menu_has_row(&store, "onboard.provider.add_model");
+        let Some(MenuBuildResult::Ready(spec)) = store.state.active_menu.as_ref() else {
+            panic!("expected collapsed model-config menu");
+        };
+        assert!(
+            !spec
+                .items
+                .iter()
+                .any(|item| item.id == "onboard.provider.family"),
+            "an omitted saved route and synthetic official route are the same address"
+        );
+    }
+
+    #[test]
     fn deleting_fallback_preserves_remaining_primary_state() {
         let mut store =
             protocol_store_with_methods(&[crate::model::APPUI_METHOD_PROFILE_LLM_DELETE]);

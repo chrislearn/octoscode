@@ -2584,7 +2584,13 @@ fn provider_config_rows(
             Some(_) => saved_primary.is_some_and(|saved| {
                 saved_family_id(saved) == Some(state.provider.family_id.trim())
                     && saved_model_id(saved) == Some(state.provider.model_id.trim())
-                    && saved_route_id(saved) == Some(state.provider.route.route_id.trim())
+                    // The server normalizes an absent route id to its
+                    // synthetic default address, `official`, when comparing
+                    // configured selections. Mirror that rule here so older
+                    // saved profiles without an explicit route still collapse
+                    // as the selected official primary.
+                    && saved_route_id(saved).unwrap_or("official")
+                        == non_empty(&state.provider.route.route_id).unwrap_or("official")
             }),
             // Immediately after an applied save, older servers may omit the
             // list echo. Retain the local label fallback only until authoritative

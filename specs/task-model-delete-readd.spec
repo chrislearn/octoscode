@@ -18,6 +18,7 @@ model-config 把新草稿误判为已保存而反复折叠回“Add a model”�
 - mutation 事件显式携带 upsert/delete/test 类型，不能靠可能残留的菜单状态猜测。
 - 一旦已有当前 profile 的服务器模型快照，是否为已保存主模型必须按完整的
   family/model/route 判断；本地旧 label 不得覆盖服务器真相。
+- 与服务端一致，将缺失的 route_id 归一化为默认线路 `official`。
 - 清除本地已保存主模型标记，但不改变 test/upsert 的既有状态机。
 
 ## 边界
@@ -54,6 +55,12 @@ model-config 把新草稿误判为已保存而反复折叠回“Add a model”�
   假设 当前 profile 有主模型与 fallback
   当 用户删除 fallback 且服务器结果仍返回主模型
   那么 客户端保留主模型已保存状态并采用服务器返回的模型列表
+
+场景: 旧配置的缺省线路等价于 official
+  测试: synthetic_official_route_matches_server_default_primary
+  假设 服务器主模型没有显式 route_id，而当前草稿线路为 official
+  当 model-config 判断草稿是否为已保存主模型
+  那么 二者按相同默认地址处理并保持已保存状态的折叠界面
 
 场景: 残留删除标记不能误分类保存响应
   测试: stale_removal_marker_cannot_reclassify_upsert_response
