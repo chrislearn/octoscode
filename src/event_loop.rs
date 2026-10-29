@@ -24,7 +24,7 @@ use crossterm::{
     },
 };
 use eyre::Result;
-#[cfg(test)]
+#[cfg(any(unix, test))]
 use octos_core::app_ui::AppUiEvent;
 use ratatui::backend::{Backend, CrosstermBackend};
 
