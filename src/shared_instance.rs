@@ -206,13 +206,12 @@ pub(crate) async fn discover(launch: &Launch) -> Result<Instance> {
         }
     }
     // Dropping `lock` releases startup ownership on every return path.
-    if let Some(record) = read_instance(&dir)? {
-        if tokio::time::timeout(Duration::from_secs(3), verify(&record))
+    if let Some(record) = read_instance(&dir)?
+        && tokio::time::timeout(Duration::from_secs(3), verify(&record))
             .await
             .is_ok_and(|r| r.is_ok())
-        {
-            return Ok(record);
-        }
+    {
+        return Ok(record);
     }
     let owner = open_lock(&dir.join(".octos-serve.lock"))?;
     let mut child = match owner.try_lock_exclusive() {
@@ -230,21 +229,20 @@ pub(crate) async fn discover(launch: &Launch) -> Result<Instance> {
         Err(error) => return Err(error.into()),
     };
     loop {
-        if let Some(child) = &mut child {
-            if let Some(status) = child.try_wait()? {
-                return Err(eyre!(
-                    "shared Octos server exited ({status}); see {}",
-                    dir.join("shared-server.log").display()
-                ));
-            }
+        if let Some(child) = &mut child
+            && let Some(status) = child.try_wait()?
+        {
+            return Err(eyre!(
+                "shared Octos server exited ({status}); see {}",
+                dir.join("shared-server.log").display()
+            ));
         }
-        if let Some(record) = read_instance(&dir)? {
-            if tokio::time::timeout(Duration::from_secs(2), verify(&record))
+        if let Some(record) = read_instance(&dir)?
+            && tokio::time::timeout(Duration::from_secs(2), verify(&record))
                 .await
                 .is_ok_and(|r| r.is_ok())
-            {
-                return Ok(record);
-            }
+        {
+            return Ok(record);
         }
         if Instant::now() >= deadline {
             return Err(eyre!(
