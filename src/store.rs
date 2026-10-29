@@ -805,14 +805,17 @@ impl Store {
         );
         self.state.scroll_transcript_to_latest();
         self.state.status = t!("status.steered_into_turn").into_owned();
+        let local_id = Some(TurnId::new());
         self.state
             .pending_turn_steers
             .push_back(crate::model::PendingTurnSteer {
+                local_id: local_id.clone(),
                 session_id: session_id.clone(),
                 turn_id: turn_id.clone(),
                 prompt: prompt.to_owned(),
             });
         Some(AppUiCommand::TurnSteer(crate::model::TurnSteerParams {
+            local_id,
             session_id,
             expected_turn_id: Some(turn_id),
             input: vec![InputItem::Text {
@@ -1247,8 +1250,8 @@ impl Store {
     fn apply_turn_steered_event(
         &mut self,
         event: crate::client_event::TurnSteeredClientEvent,
+        pending: Option<crate::model::PendingTurnSteer>,
     ) -> Option<AppUiCommand> {
-        let pending = self.state.pending_turn_steers.pop_front();
         if event.result.steered {
             // task-steer-retained-until-echo: accepted, not yet confirmed —
             // keep the text until its UserMessage echo lands, or the turn's
@@ -1645,6 +1648,16 @@ impl Store {
             .retain(|draft| draft.session_id != peer_key);
         self.state.pending_session_approvals.remove(&peer_key);
         self.state.pending_session_questions.remove(&peer_key);
+        self.state
+            .pending_decision_responses
+            .retain(|pending| match pending {
+                crate::model::PendingDecisionResponse::Approval(approval) => {
+                    approval.session_id != peer_key
+                }
+                crate::model::PendingDecisionResponse::Question(picker) => {
+                    picker.session_id != peer_key
+                }
+            });
         // A GLOBAL approval/question modal is the FOCUSED session's; after the
         // switch it is the master's (promoted from its stash) or — when the
         // master had none — still the closed peer's. Tear it down only in the
@@ -7402,10 +7415,21 @@ impl Store {
         &mut self,
         action: ApprovalModalAction,
     ) -> Option<AppUiCommand> {
+        if self.state.approval.as_ref().is_some_and(|approval| {
+            self.decision_response_pending(&crate::model::InputRequest::Approval {
+                session_id: approval.session_id.clone(),
+                approval_id: approval.approval_id.clone(),
+            })
+        }) {
+            return None;
+        }
         let Some(approval) = self.state.approval.take() else {
             self.state.status = t!("status.no_active_approval").into_owned();
             return None;
         };
+        self.state.pending_decision_responses.push(
+            crate::model::PendingDecisionResponse::Approval(Box::new(approval.clone())),
+        );
 
         self.state.status = t!(
             "status.approval_action",
@@ -7443,10 +7467,26 @@ impl Store {
         session: &SessionKey,
         action: ApprovalModalAction,
     ) -> Option<AppUiCommand> {
+        if self
+            .state
+            .pending_session_approvals
+            .get(session)
+            .is_some_and(|approval| {
+                self.decision_response_pending(&crate::model::InputRequest::Approval {
+                    session_id: approval.session_id.clone(),
+                    approval_id: approval.approval_id.clone(),
+                })
+            })
+        {
+            return None;
+        }
         let Some(approval) = self.state.pending_session_approvals.remove(session) else {
             self.state.status = t!("status.no_active_approval").into_owned();
             return None;
         };
+        self.state.pending_decision_responses.push(
+            crate::model::PendingDecisionResponse::Approval(Box::new(approval.clone())),
+        );
 
         self.state.status = t!(
             "status.approval_action",
@@ -7677,6 +7717,14 @@ impl Store {
     /// picker, mirroring [`Self::respond_approval_command`]. Clears the picker
     /// and unblocks the run state.
     pub fn respond_user_question_command(&mut self) -> Option<AppUiCommand> {
+        if self.state.user_question.as_ref().is_some_and(|picker| {
+            self.decision_response_pending(&crate::model::InputRequest::Question {
+                session_id: picker.session_id.clone(),
+                question_id: picker.question_id.clone(),
+            })
+        }) {
+            return None;
+        }
         // A garbled/protocol-violation event with NO structured questions is not
         // submittable: any respond we form would either be rejected by the
         // backend validator (answers.len() must equal questions.len()) or carry
@@ -7698,6 +7746,9 @@ impl Store {
             self.state.status = t!("status.no_active_question").into_owned();
             return None;
         };
+        self.state.pending_decision_responses.push(
+            crate::model::PendingDecisionResponse::Question(picker.clone()),
+        );
 
         let params = picker.to_respond_params();
         self.state.status = t!("status.answered_question", title = picker.title).into_owned();
@@ -8454,8 +8505,137 @@ impl Store {
         }
     }
 
+    fn decision_response_pending(&self, request: &crate::model::InputRequest) -> bool {
+        self.state
+            .pending_decision_responses
+            .iter()
+            .any(|pending| &pending.request() == request)
+    }
+
+    fn apply_input_response(
+        &mut self,
+        request: crate::model::InputRequest,
+        event: Option<ClientEvent>,
+    ) -> Option<AppUiCommand> {
+        use crate::model::{InputRequest, PendingDecisionResponse};
+        if let InputRequest::Steer(local_id) = request {
+            let index = self
+                .state
+                .pending_turn_steers
+                .iter()
+                .position(|pending| pending.local_id.as_ref() == Some(&local_id))?;
+            let pending = self.state.pending_turn_steers.remove(index)?;
+            return match event {
+                Some(ClientEvent::TurnSteered(event)) => {
+                    self.apply_turn_steered_event(event, Some(pending))
+                }
+                Some(ClientEvent::App(event)) => {
+                    if let AppUiEvent::Error(error) = *event {
+                        // A malformed success may already have acted; never automatically resend it.
+                        if error.code != "invalid_result" {
+                            self.state.withdraw_steered_user_prompt(
+                                &pending.session_id,
+                                &pending.turn_id,
+                                &pending.prompt,
+                            );
+                            self.state
+                                .stage_prompt_back(&pending.session_id, pending.prompt);
+                        }
+                        self.state.status = t!(
+                            "status.error_code_message",
+                            code = error.code,
+                            message = error.message
+                        )
+                        .into_owned();
+                    }
+                    None
+                }
+                _ => None,
+            };
+        }
+        let pending = self
+            .state
+            .pending_decision_responses
+            .iter()
+            .position(|pending| pending.request() == request)
+            .map(|index| self.state.pending_decision_responses.remove(index));
+        if let Some(ClientEvent::App(app_event)) = event.as_ref()
+            && let AppUiEvent::Error(error) = app_event.as_ref()
+        {
+            // A terminal notification may have settled the backup before a late failure.
+            if !matches!(
+                error.code.as_str(),
+                "user_question_stale"
+                    | "user_question_unknown"
+                    | "approval_stale"
+                    | "approval_unknown"
+            ) {
+                match pending {
+                    Some(PendingDecisionResponse::Approval(approval)) => {
+                        let mut approval = *approval;
+                        approval.visible = true;
+                        if self
+                            .state
+                            .active_session()
+                            .is_some_and(|session| session.id == approval.session_id)
+                            && self.state.approval.is_none()
+                        {
+                            self.reveal_pending_decision();
+                            self.state.set_chat_view(crate::model::ChatViewTarget::Main);
+                            self.state.focus = FocusPane::Composer;
+                            self.state.set_run_state_blocked(approval.title.clone());
+                            self.state.approval = Some(approval);
+                        } else {
+                            self.state
+                                .pending_session_approvals
+                                .entry(approval.session_id.clone())
+                                .or_insert(approval);
+                        }
+                    }
+                    Some(PendingDecisionResponse::Question(mut picker)) => {
+                        picker.visible = true;
+                        if self
+                            .state
+                            .active_session()
+                            .is_some_and(|session| session.id == picker.session_id)
+                            && self.state.user_question.is_none()
+                        {
+                            self.reveal_pending_decision();
+                            self.state.set_chat_view(crate::model::ChatViewTarget::Main);
+                            self.state.focus = FocusPane::Composer;
+                            self.state.set_run_state_blocked(picker.title.clone());
+                            self.state.user_question = Some(picker);
+                        } else {
+                            self.state
+                                .pending_session_questions
+                                .entry(picker.session_id.clone())
+                                .or_insert(picker);
+                        }
+                    }
+                    None => {}
+                }
+            }
+            self.state.status = t!(
+                "status.error_code_message",
+                code = error.code,
+                message = error.message
+            )
+            .into_owned();
+            self.state.push_activity(ActivityItem::new(
+                ActivityKind::Error,
+                error.code.clone(),
+                error.message.clone(),
+            ));
+            return None;
+        }
+        event.and_then(|event| self.apply_client_event(event))
+    }
+
     pub fn apply_client_event(&mut self, event: ClientEvent) -> Option<AppUiCommand> {
         match event {
+            ClientEvent::InputResponse { request, event } => {
+                self.apply_input_response(request, event.map(|event| *event))
+            }
             ClientEvent::App(event) => self.apply_event(*event),
             // #22b-r1: transport-attributed hydrate failure — release ONLY
             // this session's marker, then surface the original error shape.
@@ -8740,7 +8920,10 @@ impl Store {
                 None
             }
             ClientEvent::PeerPrepared(event) => self.apply_peer_prepared_event(event),
-            ClientEvent::TurnSteered(event) => self.apply_turn_steered_event(event),
+            ClientEvent::TurnSteered(event) => {
+                let pending = self.state.pending_turn_steers.pop_front();
+                self.apply_turn_steered_event(event, pending)
+            }
             ClientEvent::PeerStaged(event) => self.apply_peer_staged_event(event),
             // octos#2019: file the background event under the session that OWNS
             // its emitter. No fallback to the focused session — an unroutable
@@ -9518,6 +9701,7 @@ impl Store {
                 // error fallback re-stages from it), so a replay landing in
                 // that window must carry it over or the text is lost.
                 let pending_turn_steers = self.state.pending_turn_steers.clone();
+                let pending_decision_responses = self.state.pending_decision_responses.clone();
                 let retained_steers = self.state.retained_steers.clone();
 
                 let mut state = AppState::from_snapshot(snapshot);
@@ -9598,6 +9782,7 @@ impl Store {
                 state.pending_peer_kickoffs = pending_peer_kickoffs;
                 state.recently_closed_peers = recently_closed_peers;
                 state.pending_turn_steers = pending_turn_steers;
+                state.pending_decision_responses = pending_decision_responses;
                 state.retained_steers = retained_steers;
                 // Settle gates the snapshot already reflects BEFORE the
                 // optimistic restore below re-inserts un-echoed rows (which
@@ -11288,6 +11473,18 @@ impl Store {
         session_id: &SessionKey,
         approvals: Vec<octos_core::ui_protocol::ApprovalRequestedEvent>,
     ) {
+        self.state
+            .pending_decision_responses
+            .retain(|pending| match pending {
+                crate::model::PendingDecisionResponse::Approval(approval)
+                    if &approval.session_id == session_id =>
+                {
+                    approvals
+                        .iter()
+                        .any(|event| event.approval_id == approval.approval_id)
+                }
+                _ => true,
+            });
         let count = approvals.len();
         let Some(event) = approvals.into_iter().last() else {
             if self
@@ -11353,6 +11550,18 @@ impl Store {
         session_id: &SessionKey,
         questions: Vec<UserQuestionRequestedEvent>,
     ) {
+        self.state
+            .pending_decision_responses
+            .retain(|pending| match pending {
+                crate::model::PendingDecisionResponse::Question(picker)
+                    if &picker.session_id == session_id =>
+                {
+                    questions
+                        .iter()
+                        .any(|event| event.question_id == picker.question_id)
+                }
+                _ => true,
+            });
         let Some(event) = questions.into_iter().last() else {
             if self
                 .state
@@ -16105,6 +16314,16 @@ impl Store {
     /// run-state transition on it (a background session's approval resolving
     /// must not repaint the ACTIVE session's chip).
     fn clear_matching_approval(&mut self, approval_id: &ApprovalId) -> Option<SessionKey> {
+        let mut responding_session = None;
+        self.state.pending_decision_responses.retain(|pending| {
+            if let crate::model::PendingDecisionResponse::Approval(approval) = pending
+                && &approval.approval_id == approval_id
+            {
+                responding_session = Some(approval.session_id.clone());
+                return false;
+            }
+            true
+        });
         let matches = self
             .state
             .approval
@@ -16117,7 +16336,7 @@ impl Store {
                 .take()
                 .map(|approval| approval.session_id);
         }
-        None
+        responding_session
     }
 
     /// Phase-1 AskUserQuestion has no dedicated `user_question/cancelled`
@@ -16125,6 +16344,9 @@ impl Store {
     /// the cancellation signal (design §4.2). When a turn terminates we drop any
     /// pending picker bound to that turn so a stale question never wedges the UI.
     fn clear_question_for_turn(&mut self, session_id: &SessionKey, turn_id: &TurnId) -> bool {
+        self.state
+            .pending_decision_responses
+            .retain(|pending| !pending.matches_turn(session_id, turn_id));
         let matches =
             self.state.user_question.as_ref().is_some_and(|picker| {
                 &picker.session_id == session_id && &picker.turn_id == turn_id

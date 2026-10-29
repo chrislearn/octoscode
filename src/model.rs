@@ -3891,6 +3891,9 @@ pub struct PeerGatherEntry {
 /// mirrors `turn/start`'s items (text only in the TUI flow).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TurnSteerParams {
+    /// Local identity preserved through rejection and out-of-order RPC replies.
+    #[serde(skip)]
+    pub local_id: Option<TurnId>,
     pub session_id: SessionKey,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_turn_id: Option<TurnId>,
@@ -3913,10 +3916,9 @@ pub struct TurnSteerResult {
 /// An in-flight `turn/steer` (octos#1807): the client-local copy of the
 /// steered text so a steer that positively DIES (server rejection /
 /// cancel-all / send-layer failure) can fall back to STAGING the prompt
-/// without losing what the user typed. FIFO — the `TurnSteered` result and
-/// the method-attributed error frames each consume exactly one entry from
-/// the front (every dead steer produces exactly one attributed error event,
-/// see the transport's send/cancel paths).
+/// without losing what the user typed. Production replies and failures carry
+/// the client-local identity, so concurrent requests never consume another
+/// steer's record. Uncorrelated legacy/mock events retain their FIFO fallback.
 /// task-steer-retained-until-echo: a steer the server ACCEPTED
 /// (`steered:true`) but has not yet CONFIRMED — confirmation is the drain-time
 /// persisted `UserMessage` echo landing (see [`AppState::apply_user_row_echo`]).
@@ -3942,6 +3944,7 @@ pub struct RetainedSteer {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PendingTurnSteer {
+    pub local_id: Option<TurnId>,
     pub session_id: SessionKey,
     /// The EXPECTED (live) turn id the steer named — also the id the
     /// optimistic transcript row was recorded under, so the error fallback
@@ -3949,6 +3952,48 @@ pub struct PendingTurnSteer {
     /// re-key it onto the real new turn.
     pub turn_id: TurnId,
     pub prompt: String,
+}
+
+/// Local correlation for user input whose state must survive dispatch failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InputRequest {
+    Steer(TurnId),
+    Approval {
+        session_id: SessionKey,
+        approval_id: ApprovalId,
+    },
+    Question {
+        session_id: SessionKey,
+        question_id: QuestionId,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PendingDecisionResponse {
+    Approval(Box<ApprovalModalState>),
+    Question(UserQuestionPickerState),
+}
+
+impl PendingDecisionResponse {
+    pub fn request(&self) -> InputRequest {
+        match self {
+            Self::Approval(value) => InputRequest::Approval {
+                session_id: value.session_id.clone(),
+                approval_id: value.approval_id.clone(),
+            },
+            Self::Question(value) => InputRequest::Question {
+                session_id: value.session_id.clone(),
+                question_id: value.question_id.clone(),
+            },
+        }
+    }
+
+    pub fn matches_turn(&self, session_id: &SessionKey, turn_id: &TurnId) -> bool {
+        match self {
+            Self::Approval(value) => &value.session_id == session_id && &value.turn_id == turn_id,
+            Self::Question(value) => &value.session_id == session_id && &value.turn_id == turn_id,
+        }
+    }
 }
 
 /// An in-flight `/peer` dispatch (#395): the client-local halves of the flow
@@ -5139,10 +5184,11 @@ pub struct AppState {
     /// that positively dies (attributed error frame) is re-staged from this
     /// stash so the typed text is never lost, and a `steered:false` result
     /// re-keys its optimistic row onto the server's real new turn. Consumed
-    /// front-first by [`crate::client_event::ClientEvent::TurnSteered`] and
-    /// the attributed error fallback (exactly one of which arrives per
-    /// steer). Bounded by the transport's pending-request cap.
+    /// by local input identity on production replies/errors. The legacy/mock
+    /// event fallback remains FIFO. Bounded by the transport's pending cap.
     pub pending_turn_steers: std::collections::VecDeque<PendingTurnSteer>,
+    /// Kept until the matching RPC or server decision settles; never resent automatically.
+    pub pending_decision_responses: Vec<PendingDecisionResponse>,
     /// task-steer-retained-until-echo: accepted-but-unconfirmed steers, in
     /// dispatch order. See [`RetainedSteer`].
     pub retained_steers: Vec<RetainedSteer>,
@@ -7223,6 +7269,7 @@ impl AppState {
             startup_prompt_dispatched: false,
             unread_turns: std::collections::HashMap::new(),
             pending_turn_steers: std::collections::VecDeque::new(),
+            pending_decision_responses: Vec::new(),
             retained_steers: Vec::new(),
             pending_peer_prepare: None,
             pending_peer_kickoffs: std::collections::HashMap::new(),
