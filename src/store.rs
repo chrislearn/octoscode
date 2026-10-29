@@ -542,7 +542,7 @@ impl Store {
             self.state.clear_settled_btw_aside(&session_id);
         }
         if queue_only && self.turn_in_progress() {
-            self.state.pending_messages.push(prompt);
+            self.state.stage_active_prompt_back(prompt);
             self.state.status = t!("status.message_staged").into_owned();
             return None;
         }
@@ -707,7 +707,7 @@ impl Store {
             if let Some(command) = self.try_steer_live_turn(&prompt) {
                 return Some(command);
             }
-            self.state.pending_messages.push(prompt);
+            self.state.stage_active_prompt_back(prompt);
             self.state.status = t!("status.message_staged").into_owned();
             self.state.scroll_transcript_to_latest();
             return None;
@@ -806,9 +806,11 @@ impl Store {
         self.state.scroll_transcript_to_latest();
         self.state.status = t!("status.steered_into_turn").into_owned();
         let local_id = Some(TurnId::new());
+        let dispatch_order = self.state.allocate_input_order();
         self.state
             .pending_turn_steers
             .push_back(crate::model::PendingTurnSteer {
+                dispatch_order,
                 local_id: local_id.clone(),
                 session_id: session_id.clone(),
                 turn_id: turn_id.clone(),
@@ -1281,11 +1283,15 @@ impl Store {
                 self.state
                     .retained_steers
                     .push(crate::model::RetainedSteer {
+                        dispatch_order: pending.dispatch_order,
                         session_id: pending.session_id,
                         turn_id: pending.turn_id,
                         prompt: pending.prompt,
                         prior_matching_user_count,
                     });
+                self.state
+                    .retained_steers
+                    .sort_by_key(|steer| steer.dispatch_order);
             }
             self.state.status = t!("status.steered_into_turn").into_owned();
             return None;
@@ -7508,7 +7514,7 @@ impl Store {
     pub fn clear_composer_or_staged_messages(&mut self) {
         if !self.state.pending_messages.is_empty() {
             let cleared = self.state.pending_messages.len();
-            self.state.pending_messages.clear();
+            self.state.clear_active_staged_prompts();
             self.state.status = t!("status.cleared_staged_messages", count = cleared).into_owned();
             return;
         }
@@ -8055,7 +8061,7 @@ impl Store {
         let prompt = diff_hunk_context_prompt(&context);
 
         if self.state.active_turn().is_some() {
-            self.state.pending_messages.push(prompt);
+            self.state.stage_active_prompt_back(prompt);
             self.state.status = t!("status.staged_diff_context", path = path).into_owned();
         } else {
             if !self.state.composer.trim().is_empty() {
@@ -8174,8 +8180,12 @@ impl Store {
                                 &pending.turn_id,
                                 &pending.prompt,
                             );
-                            self.state
-                                .stage_prompt_back(&pending.session_id, pending.prompt);
+                            self.state.restage_steer_in_dispatch_order(
+                                &pending.session_id,
+                                pending.prompt,
+                                pending.dispatch_order,
+                                false,
+                            );
                             self.state.status = t!("status.message_staged").into_owned();
                             return None;
                         }
@@ -8538,8 +8548,12 @@ impl Store {
                                 &pending.turn_id,
                                 &pending.prompt,
                             );
-                            self.state
-                                .stage_prompt_back(&pending.session_id, pending.prompt);
+                            self.state.restage_steer_in_dispatch_order(
+                                &pending.session_id,
+                                pending.prompt,
+                                pending.dispatch_order,
+                                false,
+                            );
                         }
                         self.state.status = t!(
                             "status.error_code_message",
@@ -9572,6 +9586,12 @@ impl Store {
                 // entries across replays (reconnect/refresh) and reset browsing.
                 let composer_history = self.state.composer_history.clone();
                 let pending_messages = self.state.pending_messages.clone();
+                let pending_messages_session = self
+                    .state
+                    .active_session()
+                    .map(|session| session.id.clone());
+                let next_input_order = self.state.next_input_order;
+                let staged_prompt_orders = self.state.staged_prompt_orders.clone();
                 let pending_messages_by_session = self.state.pending_messages_by_session.clone();
                 let optimistic_user_messages = self.state.optimistic_user_messages.clone();
                 let turn_prompt_anchors = self.state.turn_prompt_anchors.clone();
@@ -9720,6 +9740,27 @@ impl Store {
                 state.composer_history.reset_navigation();
                 state.pending_messages = pending_messages;
                 state.pending_messages_by_session = pending_messages_by_session;
+                state.next_input_order = next_input_order;
+                state.staged_prompt_orders = staged_prompt_orders;
+                // Local queues belong to session keys, even when a replay
+                // selects a different session than the outgoing local state.
+                if state.active_session().map(|session| &session.id)
+                    != pending_messages_session.as_ref()
+                {
+                    if let Some(session_id) = pending_messages_session {
+                        state
+                            .pending_messages_by_session
+                            .insert(session_id, std::mem::take(&mut state.pending_messages));
+                    }
+                    if let Some(session_id) =
+                        state.active_session().map(|session| session.id.clone())
+                    {
+                        state.pending_messages = state
+                            .pending_messages_by_session
+                            .remove(&session_id)
+                            .unwrap_or_default();
+                    }
+                }
                 state.optimistic_user_messages = optimistic_user_messages;
                 state.turn_prompt_anchors = turn_prompt_anchors;
                 state.live_reply_segment_boundaries = live_reply_segment_boundaries;
@@ -9959,8 +10000,12 @@ impl Store {
                                 &pending.turn_id,
                                 &pending.prompt,
                             );
-                            self.state
-                                .stage_prompt_back(&pending.session_id, pending.prompt);
+                            self.state.restage_steer_in_dispatch_order(
+                                &pending.session_id,
+                                pending.prompt,
+                                pending.dispatch_order,
+                                false,
+                            );
                             self.state.status = t!("status.message_staged").into_owned();
                             return None;
                         }
@@ -13450,7 +13495,7 @@ impl Store {
         event: octos_core::ui_protocol::TurnSteerDroppedEvent,
     ) -> Option<AppUiCommand> {
         let session_id = event.session_id.clone();
-        let mut restaged: Vec<String> = Vec::new();
+        let mut restaged: Vec<(u64, String)> = Vec::new();
         let mut unmatched = 0usize;
         for text in event.inputs {
             let position = self.state.retained_steers.iter().position(|steer| {
@@ -13466,17 +13511,19 @@ impl Store {
                         &event.turn_id,
                         &steer.prompt,
                     );
-                    restaged.push(steer.prompt);
+                    restaged.push((steer.dispatch_order, steer.prompt));
                 }
                 None => unmatched += 1,
             }
         }
         if !restaged.is_empty() {
             let count = restaged.len();
-            // Back-to-front so the FIRST returned text ends up at the very
-            // front of the queue (they were typed before anything staged after).
-            for prompt in restaged.into_iter().rev() {
-                self.state.restage_staged_prompt_front(&session_id, prompt);
+            // Local dispatch order survives out-of-order RPC acceptance and
+            // multiple drop notifications, while later staged input stays behind.
+            restaged.sort_by_key(|(order, _)| *order);
+            for (order, prompt) in restaged {
+                self.state
+                    .restage_steer_in_dispatch_order(&session_id, prompt, order, true);
             }
             self.state.status = t!(
                 "status.steer_returned_by_server",
@@ -15416,7 +15463,7 @@ impl Store {
         let mut unconfirmed = Vec::new();
         self.state.retained_steers.retain(|steer| {
             if &steer.session_id == session_id && &steer.turn_id == turn_id {
-                unconfirmed.push(steer.prompt.clone());
+                unconfirmed.push((steer.dispatch_order, steer.prompt.clone()));
                 false
             } else {
                 true
@@ -15425,14 +15472,16 @@ impl Store {
         if unconfirmed.is_empty() {
             return false;
         }
-        for prompt in &unconfirmed {
+        unconfirmed.sort_by_key(|(order, _)| *order);
+        for (_, prompt) in &unconfirmed {
             self.state
                 .withdraw_steered_user_prompt(session_id, turn_id, prompt);
         }
-        // Re-stage back-to-front so the FIRST typed steer ends up at the very
-        // front of the queue.
-        for prompt in unconfirmed.into_iter().rev() {
-            self.state.restage_staged_prompt_front(session_id, prompt);
+        // Restore by local dispatch order, including earlier rejected steers
+        // already in the queue and prompts staged after these dispatches.
+        for (order, prompt) in unconfirmed {
+            self.state
+                .restage_steer_in_dispatch_order(session_id, prompt, order, true);
         }
         true
     }
@@ -15485,6 +15534,17 @@ impl Store {
             .state
             .active_session()
             .map(|session| session.id.clone())?;
+        // An earlier dispatched steer can still fail and recover ahead of
+        // the queue head. Keep recovered prompts visible, but do not send a
+        // later prompt before the session's outstanding replies settle.
+        if self
+            .state
+            .pending_turn_steers
+            .iter()
+            .any(|pending| pending.session_id == session_id)
+        {
+            return None;
+        }
         // Pre-first-token window: run_state is InProgress from turn-start but
         // no delta has arrived, so active_turn() is None. Draining here would
         // start a SECOND concurrent turn (codex PR371 review) — UNLESS the
@@ -15555,12 +15615,17 @@ impl Store {
             return None;
         }
 
-        let prompt = self.state.pending_messages.remove(0);
-        let mut remaining_pending = std::mem::take(&mut self.state.pending_messages);
+        let prompt = self.state.take_active_staged_prompt()?;
+        // Hide the remaining queue only while constructing the submit:
+        // record_submitted_user_prompt suppresses optimistic rows whose text
+        // is still staged, including a distinct duplicate waiting behind it.
+        // The positional order metadata stays paired with this saved queue.
+        let remaining_pending = std::mem::take(&mut self.state.pending_messages);
         let command = self.start_prompt_turn(
             prompt.clone(),
             t!("status.submitted_staged_message").into_owned(),
         );
+        self.state.pending_messages = remaining_pending;
         match &command {
             // The gate carries the prompt + its optimistic turn id so a
             // transport-level death of this submit can RE-STAGE it — the
@@ -15576,10 +15641,9 @@ impl Store {
             // has no turn to gate on — leave the gate unarmed.
             Some(_) => {}
             None => {
-                remaining_pending.insert(0, prompt);
+                self.state.restage_staged_prompt_front(&session_id, prompt);
             }
         }
-        self.state.pending_messages = remaining_pending;
         command
     }
 

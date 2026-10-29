@@ -15617,4 +15617,276 @@ done
         assert!(store.state.pending_turn_steers.is_empty());
         assert_eq!(store.state.pending_messages, ["first", "second"]);
     }
+
+    fn input_response_reject(
+        store: &mut crate::store::Store,
+        exchange: &mut ProtocolExchange,
+        id: &str,
+    ) {
+        let reply = json!({"jsonrpc":"2.0", "id":id, "error":{"code":-32602,"message":"rejected"}});
+        store.apply_client_event(
+            exchange
+                .decode_rpc_text(&reply.to_string())
+                .unwrap()
+                .unwrap(),
+        );
+    }
+
+    #[test]
+    fn input_response_cancel_9_10_restores_local_dispatch_order() {
+        let mut store = input_lifecycle_store();
+        let a = input_lifecycle_steer(&mut store, "first");
+        let b = input_lifecycle_steer(&mut store, "second");
+        let mut exchange = ProtocolExchange {
+            next_request_id: 8,
+            ..ProtocolExchange::default()
+        };
+        assert_eq!(exchange.build_tracked_request(a).unwrap().id, "tui-9");
+        assert_eq!(exchange.build_tracked_request(b).unwrap().id, "tui-10");
+        for cancelled in exchange.cancel_pending_requests("connection closed") {
+            store.apply_client_event(cancelled.into_client_event());
+        }
+        assert!(store.state.pending_turn_steers.is_empty());
+        assert_eq!(store.state.pending_messages, ["first", "second"]);
+    }
+
+    #[test]
+    fn input_response_reverse_rejections_preserve_duplicate_dispatch_order() {
+        let mut store = input_lifecycle_store();
+        let commands =
+            ["repeat", "middle", "repeat"].map(|text| input_lifecycle_steer(&mut store, text));
+        let session_id = store.state.sessions[0].id.clone();
+        store
+            .state
+            .stage_prompt_back(&session_id, "later queued".into());
+        let mut exchange = ProtocolExchange::default();
+        let requests = commands.map(|command| exchange.build_tracked_request(command).unwrap());
+        for request in requests.iter().rev() {
+            input_response_reject(&mut store, &mut exchange, &request.id);
+        }
+        assert!(store.state.pending_turn_steers.is_empty());
+        assert_eq!(
+            store.state.pending_messages,
+            ["repeat", "middle", "repeat", "later queued"]
+        );
+        assert!(
+            store.state.sessions[0].messages.is_empty(),
+            "only the exact failed optimistic rows are withdrawn"
+        );
+    }
+
+    #[test]
+    fn input_response_reverse_acceptance_then_legacy_terminal_preserves_dispatch_order() {
+        let mut store = input_lifecycle_store();
+        store.state.capabilities = Some(crate::menu::CapabilitySet::from_methods([
+            crate::model::APPUI_METHOD_TURN_STEER,
+        ]));
+        let session_id = store.state.sessions[0].id.clone();
+        let turn_id = store.state.active_turn().unwrap().1.clone();
+        let a = input_lifecycle_steer(&mut store, "first");
+        let b = input_lifecycle_steer(&mut store, "second");
+        let mut exchange = ProtocolExchange::default();
+        let a = exchange.build_tracked_request(a).unwrap();
+        let b = exchange.build_tracked_request(b).unwrap();
+        for request in [&b, &a] {
+            let reply = json!({"jsonrpc":"2.0", "id":request.id, "result":{"turn_id":turn_id,"steered":true}});
+            store.apply_client_event(
+                exchange
+                    .decode_rpc_text(&reply.to_string())
+                    .unwrap()
+                    .unwrap(),
+            );
+        }
+        assert_eq!(
+            store
+                .state
+                .retained_steers
+                .iter()
+                .map(|steer| steer.prompt.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "second"]
+        );
+        store
+            .state
+            .stage_prompt_back(&session_id, "later queued".into());
+        let command = store
+            .apply_event(AppUiEvent::Protocol(UiNotification::TurnCompleted(
+                octos_core::ui_protocol::TurnCompletedEvent {
+                    token_usage: None,
+                    session_id,
+                    topic: None,
+                    turn_id,
+                    cursor: None,
+                    tokens_in: None,
+                    tokens_out: None,
+                    session_result: None,
+                },
+            )))
+            .expect("first recovered steer drains");
+        let AppUiCommand::SubmitPrompt(params) = command else {
+            panic!("expected recovered prompt")
+        };
+        assert!(matches!(&params.input[0], InputItem::Text { text } if text == "first"));
+        assert_eq!(store.state.pending_messages, ["second", "later queued"]);
+        assert!(store.state.retained_steers.is_empty());
+    }
+
+    #[test]
+    fn input_response_snapshot_preserves_background_queue_order_and_session_owner() {
+        let mut store = input_lifecycle_store();
+        let session_a = store.state.sessions[0].id.clone();
+        let a = input_lifecycle_steer(&mut store, "first A");
+        let b = input_lifecycle_steer(&mut store, "second A");
+        let mut exchange = ProtocolExchange::default();
+        let a = exchange.build_tracked_request(a).unwrap();
+        let b = exchange.build_tracked_request(b).unwrap();
+        input_response_reject(&mut store, &mut exchange, &b.id);
+        let mut sessions = store.state.sessions.clone();
+        let mut second = sessions[0].clone();
+        second.id = SessionKey("local:second-session".into());
+        second.messages.clear();
+        sessions.push(second);
+        store.apply_event(AppUiEvent::Snapshot(octos_core::app_ui::AppUiSnapshot {
+            sessions,
+            selected_session: 1,
+            status: "replay".into(),
+            target: None,
+            readonly: false,
+        }));
+        assert!(
+            store.state.pending_messages.is_empty(),
+            "A's recovered input must not migrate to the selected B session"
+        );
+        let session_b = store.state.sessions[1].id.clone();
+        store.state.stage_prompt_back(&session_b, "B queue".into());
+        input_response_reject(&mut store, &mut exchange, &a.id);
+        store.state.stage_prompt_back(&session_a, "later A".into());
+        assert_eq!(store.state.pending_messages, ["B queue"]);
+        assert_eq!(
+            store
+                .state
+                .pending_messages_by_session
+                .get(&session_a)
+                .unwrap(),
+            &["first A", "second A", "later A"]
+        );
+        store.state.switch_selected_session(0);
+        assert_eq!(
+            store.state.pending_messages,
+            ["first A", "second A", "later A"]
+        );
+        assert_eq!(
+            store
+                .state
+                .pending_messages_by_session
+                .get(&session_b)
+                .unwrap(),
+            &["B queue"]
+        );
+    }
+
+    #[test]
+    fn input_response_terminal_waits_for_earlier_steer_before_draining_recovery() {
+        let mut store = input_lifecycle_store();
+        let session_id = store.state.sessions[0].id.clone();
+        let turn_id = store.state.active_turn().unwrap().1.clone();
+        let a = input_lifecycle_steer(&mut store, "first");
+        let b = input_lifecycle_steer(&mut store, "second");
+        let mut exchange = ProtocolExchange::default();
+        let a = exchange.build_tracked_request(a).unwrap();
+        let b = exchange.build_tracked_request(b).unwrap();
+        input_response_reject(&mut store, &mut exchange, &b.id);
+        assert_eq!(
+            store.state.pending_messages,
+            ["second"],
+            "a refused input is visible immediately"
+        );
+        let terminal = store.apply_event(AppUiEvent::Protocol(UiNotification::TurnCompleted(
+            octos_core::ui_protocol::TurnCompletedEvent {
+                token_usage: None,
+                session_id,
+                topic: None,
+                turn_id,
+                cursor: None,
+                tokens_in: None,
+                tokens_out: None,
+                session_result: None,
+            },
+        )));
+        assert!(
+            terminal.is_none(),
+            "do not send second while first can still recover ahead of it"
+        );
+        assert!(!store.drain_staged_backstop());
+        input_response_reject(&mut store, &mut exchange, &a.id);
+        assert_eq!(store.state.pending_messages, ["first", "second"]);
+        assert!(
+            store.drain_staged_backstop(),
+            "the final reply releases the automatic drain"
+        );
+        let command = store
+            .state
+            .pending_autonomy_hydration
+            .pop_front()
+            .expect("backstop command");
+        let AppUiCommand::SubmitPrompt(params) = command else {
+            panic!("expected prompt")
+        };
+        assert!(matches!(&params.input[0], InputItem::Text { text } if text == "first"));
+        assert_eq!(store.state.pending_messages, ["second"]);
+    }
+
+    #[test]
+    fn input_response_terminal_late_acceptance_releases_pending_drain_gate() {
+        let mut store = input_lifecycle_store();
+        store.state.capabilities = Some(crate::menu::CapabilitySet::from_methods([
+            crate::model::APPUI_METHOD_TURN_STEER,
+        ]));
+        let session_id = store.state.sessions[0].id.clone();
+        let turn_id = store.state.active_turn().unwrap().1.clone();
+        let a = input_lifecycle_steer(&mut store, "first");
+        let b = input_lifecycle_steer(&mut store, "second");
+        let mut exchange = ProtocolExchange::default();
+        let a = exchange.build_tracked_request(a).unwrap();
+        let b = exchange.build_tracked_request(b).unwrap();
+        input_response_reject(&mut store, &mut exchange, &b.id);
+        assert!(
+            store
+                .apply_event(AppUiEvent::Protocol(UiNotification::TurnCompleted(
+                    octos_core::ui_protocol::TurnCompletedEvent {
+                        token_usage: None,
+                        session_id,
+                        topic: None,
+                        turn_id: turn_id.clone(),
+                        cursor: None,
+                        tokens_in: None,
+                        tokens_out: None,
+                        session_result: None,
+                    }
+                )))
+                .is_none()
+        );
+        let reply =
+            json!({"jsonrpc":"2.0", "id":a.id, "result":{"turn_id":turn_id,"steered":true}});
+        store.apply_client_event(
+            exchange
+                .decode_rpc_text(&reply.to_string())
+                .unwrap()
+                .unwrap(),
+        );
+        assert!(store.state.pending_turn_steers.is_empty());
+        assert!(
+            store.drain_staged_backstop(),
+            "a late successful reply releases the new gate too"
+        );
+        let command = store
+            .state
+            .pending_autonomy_hydration
+            .pop_front()
+            .expect("backstop command");
+        let AppUiCommand::SubmitPrompt(params) = command else {
+            panic!("expected prompt")
+        };
+        assert!(matches!(&params.input[0], InputItem::Text { text } if text == "second"));
+    }
 }
