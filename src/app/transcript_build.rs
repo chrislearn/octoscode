@@ -1149,10 +1149,11 @@ fn wrap_transcript_row(line: &Line<'static>, width: usize) -> Vec<Line<'static>>
 
         // Include the incoming grapheme: checking only the accumulated width
         // can admit a two-cell glyph one column beyond the physical row.
-        if line_width >= width
-            || (symbol_width > 0
-                && line_width + whitespace_width + word_width + symbol_width > width)
-        {
+        let original_wrap = line_width >= width
+            || (symbol_width > 0 && line_width + whitespace_width + word_width >= width);
+        let incoming_overflow =
+            symbol_width > 0 && line_width + whitespace_width + word_width + symbol_width > width;
+        if original_wrap || incoming_overflow {
             let mut remaining_width = width.saturating_sub(line_width);
             rows.push(owned_transcript_row(
                 std::mem::take(&mut pending_line),
@@ -1168,7 +1169,10 @@ fn wrap_transcript_row(line: &Line<'static>, width: usize) -> Vec<Line<'static>>
                 remaining_width -= symbol_width;
                 whitespace.pop_front();
             }
-            if is_whitespace && whitespace.is_empty() {
+            // The upstream rule skips incoming whitespace only when the line
+            // was already full. A wide whitespace grapheme that merely cannot
+            // fit the final column must be retained on the following line.
+            if original_wrap && is_whitespace && whitespace.is_empty() {
                 continue;
             }
         }

@@ -41,6 +41,29 @@ fn transcript_physical_rows_preserve_word_wrap_and_styled_wide_text() {
 }
 
 #[test]
+fn transcript_physical_rows_preserve_wide_whitespace_at_wrap_boundaries() {
+    use ratatui::{buffer::Buffer, widgets::Widget};
+
+    // A two-cell whitespace grapheme cannot fill the final one-cell gap.
+    // With trim=false it belongs on the next line rather than disappearing.
+    for source in ["abc\u{3000}d", "abcdefghijk\u{3000}x"] {
+        for width in [4, 12] {
+            let area = Rect::new(0, 0, width, 16);
+            let lines = vec![Line::from(source)];
+            let mut expected = Buffer::empty(area);
+            Paragraph::new(lines.clone())
+                .wrap(Wrap { trim: false })
+                .render(area, &mut expected);
+
+            let (physical, _) = transcript_physical_rows(lines, usize::from(width), None);
+            let mut actual = Buffer::empty(area);
+            Paragraph::new(physical).render(area, &mut actual);
+            assert_eq!(actual, expected, "source={source:?}, width={width}");
+        }
+    }
+}
+
+#[test]
 fn transcript_physical_rows_keep_wide_words_inside_viewport() {
     use ratatui::{buffer::Buffer, widgets::Widget};
 

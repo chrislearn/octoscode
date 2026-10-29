@@ -150,3 +150,10 @@ pager 内完整会话在上方独立滚动，composer 始终钉在终端最底�
   假设 文本包含中文与组合 emoji，且可用列数跨过词宽边界
   当 渲染物理行窗口
   那么 所有视觉行均在宽度预算内且保留全部非空白字符
+
+场景: 宽空白不能填充剩余单列时保留到下一行
+  测试: transcript_physical_rows_preserve_wide_whitespace_at_wrap_boundaries
+  假设 文本在换行边界包含双列全角空格且只剩一列
+  当 使用 trim false 的物理行窗口渲染
+  那么 不能容纳的全角空格进入下一行而不是丢失
+  并且 输出与 ratatui WordWrapper 一致
