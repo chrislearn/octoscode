@@ -385,18 +385,16 @@ mod tests {
         struct Cleanup(PathBuf);
         impl Drop for Cleanup {
             fn drop(&mut self) {
-                if let Ok(bytes) = std::fs::read(self.0.join(RECORD)) {
-                    if let Ok(record) = serde_json::from_slice::<Value>(&bytes) {
-                        if let Some(pid) = record["pid"]
-                            .as_u64()
-                            .filter(|pid| *pid > 1 && *pid <= i32::MAX as u64)
-                        {
-                            // This fresh private fixture directory is owned by this test.
-                            let _ = Command::new("kill")
-                                .args(["-TERM", &pid.to_string()])
-                                .status();
-                        }
-                    }
+                if let Ok(bytes) = std::fs::read(self.0.join(RECORD))
+                    && let Ok(record) = serde_json::from_slice::<Value>(&bytes)
+                    && let Some(pid) = record["pid"]
+                        .as_u64()
+                        .filter(|pid| *pid > 1 && *pid <= i32::MAX as u64)
+                {
+                    // This fresh private fixture directory is owned by this test.
+                    let _ = Command::new("kill")
+                        .args(["-TERM", &pid.to_string()])
+                        .status();
                 }
             }
         }
