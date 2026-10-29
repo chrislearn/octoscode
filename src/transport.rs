@@ -1,3 +1,11 @@
+//! Transport drivers and protocol request handling.
+//!
+//! WebSocket receive queues have both event-count and payload-byte budgets.
+//! When either budget is full, the WebSocket task deliberately waits for the
+//! UI to consume or drop queued events instead of failing the connection.
+//! This backpressure wait has no independent timeout; explicit driver
+//! disconnect aborts the task, including a pending budget acquisition.
+
 use std::collections::{HashMap, VecDeque};
 
 use chrono::Utc;
