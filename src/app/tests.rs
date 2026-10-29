@@ -7,6 +7,64 @@
 use super::*;
 
 #[test]
+fn transcript_physical_rows_preserve_word_wrap_and_styled_wide_text() {
+    use ratatui::{buffer::Buffer, widgets::Widget};
+
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("One bold", Style::default().fg(Color::Red)),
+            Span::styled("word tail 中文 内容", Style::default().fg(Color::Blue)),
+        ]),
+        Line::from("longunbrokentokenwith👩‍💻emoji"),
+        Line::from("a  pair of   spaced words"),
+        Line::from("          leading whitespace and tail       "),
+        Line::from("        "),
+        Line::from("a\u{00a0}nonbreaking word\u{200b}next"),
+        Line::from("centered text").alignment(ratatui::layout::Alignment::Center),
+        Line::from("right aligned text").alignment(ratatui::layout::Alignment::Right),
+        Line::from(""),
+        Line::from("TAIL"),
+    ];
+    for width in [12, 20, 50] {
+        let area = Rect::new(0, 0, width, 96);
+        let mut original = Buffer::empty(area);
+        let original_paragraph = Paragraph::new(lines.clone()).wrap(Wrap { trim: false });
+        let expected_rows = original_paragraph.line_count(width);
+        original_paragraph.render(area, &mut original);
+
+        let (physical, _) = transcript_physical_rows(lines.clone(), usize::from(width), None);
+        assert_eq!(physical.len(), expected_rows, "row count at width {width}");
+        let mut windowed = Buffer::empty(area);
+        Paragraph::new(physical).render(area, &mut windowed);
+        assert_eq!(windowed, original, "word-wrap changed at width {width}");
+    }
+}
+
+#[test]
+fn transcript_physical_rows_keep_wide_words_inside_viewport() {
+    use ratatui::{buffer::Buffer, widgets::Widget};
+
+    let source = "centered 中文 👩‍💻 text";
+    for width in [2, 3, 5, 12] {
+        let (rows, _) = transcript_physical_rows(
+            vec![Line::from(source).alignment(ratatui::layout::Alignment::Center)],
+            width,
+            None,
+        );
+        assert!(rows.iter().all(|row| row.width() <= width));
+        let content = rows
+            .iter()
+            .flat_map(|row| row.spans.iter())
+            .flat_map(|span| span.content.chars())
+            .filter(|ch| !ch.is_whitespace())
+            .collect::<String>();
+        assert_eq!(content, "centered中文👩‍💻text");
+        let area = Rect::new(0, 0, width as u16, 24);
+        Paragraph::new(rows).render(area, &mut Buffer::empty(area));
+    }
+}
+
+#[test]
 fn activity_navigator_localizes_known_values_without_rewriting_english_protocol_values() {
     assert_eq!(
         activity_navigator_value_label_for_locale("modify", "en"),
