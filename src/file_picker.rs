@@ -10,11 +10,12 @@
 //! by [`FILE_PICKER_MAX_FILES`] / [`FILE_PICKER_MAX_DEPTH`] plus directory and
 //! entry budgets. The scan remains synchronous, so individual filesystem I/O
 //! may still be slow, but a wide directory cannot cause unbounded enumeration,
-//! sorting, or queued work. `.git`
-//! and the ubiquitous dependency/build trees (`target`, `node_modules`) are
-//! skipped — with a ~2000-entry cap they would otherwise flood out the source
-//! files the picker exists to find. Symlinks are skipped entirely (no cycle
-//! chasing, no walking out of the workspace).
+//! sorting, or queued work. When the entry budget truncates a directory, the
+//! scan stops after processing its retained entries; its subdirectories are
+//! not visited. `.git` and the ubiquitous dependency/build trees (`target`,
+//! `node_modules`) are skipped — with a ~2000-entry cap they would otherwise
+//! flood out the source files the picker exists to find. Symlinks are skipped
+//! entirely (no cycle chasing, no walking out of the workspace).
 
 use std::collections::VecDeque;
 use std::path::Path;
